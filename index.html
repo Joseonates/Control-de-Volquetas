@@ -47,18 +47,22 @@ button,input,select,textarea{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
 img{max-width:100%}
 
-.top{background:var(--deep);color:var(--on-deep);padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 10px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:40}
+.head{position:sticky;top:0;z-index:40}
+.top{background:var(--deep);color:var(--on-deep);padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 10px;display:flex;align-items:center;gap:10px}
 .top b{font-family:var(--disp);font-size:16px;font-weight:800}
 .top .who{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
 .sync{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:rgba(237,240,233,.72);background:var(--deep-2);border:1px solid rgba(255,255,255,.12);padding:4px 9px;border-radius:99px;cursor:pointer}
 .dot{width:7px;height:7px;border-radius:99px;background:#8A918A;flex:none}
 .dot.on{background:#5FBF8F}.dot.off{background:#DFA043}.dot.err{background:#E2806D}
 
-main{padding:14px 14px calc(88px + var(--safe-b));max-width:900px;margin:0 auto}
-.bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);display:flex;padding:6px 6px calc(6px + var(--safe-b));z-index:40}
-.bar button{flex:1;background:none;border:0;padding:7px 2px;border-radius:9px;cursor:pointer;color:var(--muted);font-size:11px;font-weight:600;display:flex;flex-direction:column;align-items:center;gap:3px}
-.bar button b{font-family:var(--disp);font-size:15px;font-weight:700;line-height:1}
+main{padding:14px 14px calc(44px + var(--safe-b));max-width:900px;margin:0 auto}
+.bar{background:var(--surface);border-bottom:1px solid var(--line);display:flex;gap:4px;padding:7px 10px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.bar::-webkit-scrollbar{display:none}
+.bar button{flex:0 0 auto;background:none;border:0;padding:8px 14px;border-radius:99px;cursor:pointer;color:var(--muted);font-size:13.5px;font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.bar button b{font-family:var(--mono);font-size:11px;font-weight:500;background:var(--bad);color:#fff;border-radius:99px;padding:0 6px;line-height:17px}
 .bar button[aria-current="true"]{color:var(--accent-ink);background:var(--accent-soft)}
+.pbar{height:6px;background:var(--surface-3);border-radius:99px;overflow:hidden;min-width:54px}
+.pbar>i{display:block;height:100%;background:var(--accent);border-radius:99px}
 
 .card{background:var(--surface);border:1px solid var(--line);border-radius:12px}
 .card>h3{font-size:13px;font-weight:700;padding:11px 13px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center}
@@ -115,7 +119,8 @@ table{border-collapse:collapse;width:100%;font-size:13px}
 th{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);text-align:left;padding:8px;border-bottom:1px solid var(--line-2);background:var(--surface-2);white-space:nowrap}
 td{padding:8px;border-bottom:1px solid var(--line)}
 tfoot td{font-weight:700;background:var(--surface-2);border-top:2px solid var(--line-2)}
-.num{text-align:right;font-variant-numeric:tabular-nums}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+@media (max-width:560px){.tw .opt{display:none}}
 .mono{font-family:var(--mono);font-size:12px}
 .empty{padding:28px 14px;text-align:center;color:var(--muted);font-size:14px}
 .note{background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent-ink);padding:11px 13px;border-radius:11px;font-size:13.5px}
@@ -128,7 +133,7 @@ dialog::backdrop{background:rgba(12,16,14,.6)}
 .db{padding:14px;overflow:auto;max-height:calc(90vh - 56px)}
 .x{background:none;border:1px solid var(--line-2);border-radius:8px;width:30px;height:30px;cursor:pointer;margin-left:auto}
 
-.toast{position:fixed;left:50%;bottom:calc(80px + var(--safe-b));transform:translateX(-50%);background:var(--deep);color:var(--on-deep);padding:10px 16px;border-radius:99px;font-size:13.5px;z-index:99;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;text-align:center}
+.toast{position:fixed;left:50%;bottom:calc(22px + var(--safe-b));transform:translateX(-50%);background:var(--deep);color:var(--on-deep);padding:10px 16px;border-radius:99px;font-size:13.5px;z-index:99;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;text-align:center}
 .toast.on{opacity:1}
 .gate{position:fixed;inset:0;background:var(--bg);z-index:60;display:flex;align-items:center;justify-content:center;padding:22px}
 .gate .in{width:100%;max-width:380px}
@@ -146,13 +151,15 @@ dialog::backdrop{background:rgba(12,16,14,.6)}
 
 <div id="gate" class="gate" hidden><div class="in" id="gateIn"></div></div>
 
-<header class="top" id="top" hidden>
-  <div><b id="tTitle">Volquetas</b> <span class="who" id="tWho"></span></div>
-  <button class="sync" id="btnSync" type="button"><span class="dot" id="sDot"></span><span id="sTxt">local</span></button>
-</header>
+<div class="head" id="head" hidden>
+  <header class="top">
+    <div><b id="tTitle">Volquetas</b> <span class="who" id="tWho"></span></div>
+    <button class="sync" id="btnSync" type="button"><span class="dot" id="sDot"></span><span id="sTxt">local</span></button>
+  </header>
+  <nav class="bar" id="bar" aria-label="Secciones"></nav>
+</div>
 
 <main id="main" hidden></main>
-<nav class="bar" id="bar" hidden></nav>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <dialog id="dlg"><div class="dh"><h3 id="dlgT"></h3><button class="x" id="dlgX" aria-label="Cerrar">✕</button></div><div class="db" id="dlgB"></div></dialog>

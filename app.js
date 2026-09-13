@@ -21,6 +21,7 @@ function abrir(t,node){$('#dlgT').textContent=t;const b=$('#dlgB');b.innerHTML='
 function cerrar(){const d=$('#dlg');if(d.open)d.close()}
 $('#dlgX').onclick=cerrar;
 const fld=(l,inner)=>'<label class="f"><span>'+esc(l)+'</span>'+inner+'</label>';
+const plu=(n,s1,s2)=>nf.format(n)+' '+(Math.abs(n)===1?s1:(s2||s1+'s'));
 const tile=(k,v,s,hi)=>'<div class="tile'+(hi?' hi':'')+'"><div class="k">'+esc(k)+'</div><div class="v">'+v+'</div><div class="s">'+esc(s||'')+'</div></div>';
 
 /* ===================== base de datos local ===================== */
@@ -193,7 +194,7 @@ function leerCodigo(txt){
 /* ---------- pantalla de entrada ---------- */
 function pintarGate(paso){
   const g=$('#gate'),c=$('#gateIn');g.hidden=false;
-  $('#top').hidden=true;$('#main').hidden=true;$('#bar').hidden=true;
+  $('#head').hidden=true;$('#main').hidden=true;
   if(paso==='rol'){
     c.innerHTML='<h2 style="font-size:26px">Volquetas</h2>'+
       '<p style="color:var(--muted);margin:6px 0 22px">Control de viajes, vales y facturación.</p>'+
@@ -253,10 +254,10 @@ function pintarGate(paso){
   }
 }
 function iniciar(){
-  $('#gate').hidden=true;$('#top').hidden=false;$('#main').hidden=false;$('#bar').hidden=false;
+  $('#gate').hidden=true;$('#head').hidden=false;$('#main').hidden=false;
   $('#tWho').textContent=esAdmin()?'administración':(miConductor()?miConductor().nombre:'conductor');
   $('#tTitle').textContent=S.cfg.empresa.nombre?S.cfg.empresa.nombre.slice(0,22):'Volquetas';
-  vista=esAdmin()?'validar':'registrar';
+  vista=esAdmin()?'tablero':'registrar';
   render();sincronizar(true);
 }
 async function salirDeRol(){
@@ -265,18 +266,21 @@ async function salirDeRol(){
 
 /* ===================== navegación ===================== */
 let vista='registrar';
-const NAV_CON=[['registrar','Registrar','+'],['mios','Mis viajes','≡']];
-const NAV_ADM=[['validar','Validar','✓'],['viajes','Viajes','≡'],['costos','Costos','$'],['cobro','Cobro','▤'],['ajustes','Ajustes','⚙']];
+const NAV_CON=[['registrar','Registrar'],['mios','Mis viajes']];
+const NAV_ADM=[['tablero','Tablero'],['validar','Validar'],['viajes','Viajes'],['costos','Costos'],['cobro','Cobro'],['ajustes','Ajustes']];
 function pintarBar(){
   const bar=$('#bar');bar.innerHTML='';
   const items=esAdmin()?NAV_ADM:NAV_CON;
-  for(const [id,l,ic] of items){
-    const b=el('button',{type:'button','data-v':id},'<b>'+ic+'</b>'+esc(l));
+  for(const [id,l] of items){
+    let extra='';
+    if(id==='validar'){const n=S.viajes.filter(v=>(v.estado||'pendiente')==='pendiente'&&!v.borrado).length;
+      if(n)extra='<b>'+n+'</b>'}
+    const b=el('button',{type:'button','data-v':id},esc(l)+extra);
     if(id===vista)b.setAttribute('aria-current','true');
-    if(id==='validar'){const n=S.viajes.filter(v=>(v.estado||'pendiente')==='pendiente').length;
-      if(n)b.innerHTML='<b>'+n+'</b>'+esc(l)}
     bar.appendChild(b);
   }
+  const act=bar.querySelector('[aria-current="true"]');
+  if(act&&act.scrollIntoView)act.scrollIntoView({block:'nearest',inline:'nearest'});
 }
 $('#bar').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(!b)return;vista=b.dataset.v;render()});
 $('#btnSync').onclick=()=>{if(!conectado()){vista='ajustes';render();toast('Configura la conexión para trabajar en línea')}else{sincronizar(true);toast('Sincronizando…')}};
@@ -284,12 +288,120 @@ $('#btnSync').onclick=()=>{if(!conectado()){vista='ajustes';render();toast('Conf
 function render(){
   pintarBar();pintarSync();
   const m=$('#main');m.innerHTML='';
-  const f={registrar:vRegistrar,mios:vMios,validar:vValidar,viajes:vViajes,costos:vCostos,cobro:vCobro,ajustes:vAjustes}[vista];
+  const f={tablero:vTablero,registrar:vRegistrar,mios:vMios,validar:vValidar,viajes:vViajes,costos:vCostos,cobro:vCobro,ajustes:vAjustes}[vista];
   m.appendChild(f?f():el('div',{class:'empty'},'—'));
   window.scrollTo(0,0);
 }
 function ph(t,s,extra){const h=el('div',{class:'ph'});h.innerHTML='<div><h2>'+esc(t)+'</h2><p>'+esc(s||'')+'</p></div>';
   if(extra){h.appendChild(el('div',{class:'spacer'}));h.appendChild(extra)}return h}
+
+/* ===================== TABLERO (admin) ===================== */
+function tablaSimple(cols,rows,foot){
+  const w=el('div',{class:'tw'});
+  if(!rows.length){w.innerHTML='<div class="empty">Sin datos en el periodo.</div>';return w}
+  const cl=c=>' class="'+(c.num?'num ':'')+(c.opt?'opt':'')+'"';
+  let h='<table><thead><tr>'+cols.map(c=>'<th'+cl(c)+'>'+esc(c.l)+'</th>').join('')+'</tr></thead><tbody>';
+  rows.forEach(r=>{h+='<tr>'+cols.map(c=>'<td'+cl(c)+'>'+(r[c.k]==null?'':r[c.k])+'</td>').join('')+'</tr>'});
+  h+='</tbody>';
+  if(foot)h+='<tfoot><tr>'+cols.map(c=>'<td'+cl(c)+'>'+(foot[c.k]==null?'':foot[c.k])+'</td>').join('')+'</tr></tfoot>';
+  w.innerHTML=h+'</table>';return w;
+}
+function selectorPeriodo(){
+  const d=el('div',{class:'card'});
+  d.innerHTML='<div class="pad gf">'+fld('Desde','<input type="date" id="pD" value="'+P.from+'">')+
+    fld('Hasta','<input type="date" id="pH" value="'+P.to+'">')+
+    '<div style="display:flex;align-items:flex-end"><button class="btn sec" id="pM" style="width:100%">Mes actual</button></div></div>';
+  $('#pD',d).onchange=e=>{P.from=e.target.value;render()};
+  $('#pH',d).onchange=e=>{P.to=e.target.value;render()};
+  $('#pM',d).onclick=()=>{mesActual();render()};
+  return d;
+}
+function vTablero(){
+  const c=el('div',{class:'stack'});
+  c.appendChild(ph('Tablero','Del '+fFecha(P.from)+' al '+fFecha(P.to)));
+  c.appendChild(selectorPeriodo());
+
+  const vs=S.viajes.filter(v=>enRango(v)&&!v.borrado);
+  const cs=S.costos.filter(x=>enRango(x)&&!x.borrado);
+  const pend=vs.filter(v=>(v.estado||'pendiente')==='pendiente');
+  const apr=vs.filter(v=>v.estado==='aprobado');
+  const fac=vs.filter(v=>v.estado==='facturado');
+  const ing=sumTot(vs), cost=cs.reduce((s,x)=>s+(+x.valor||0),0);
+
+  const t=el('div',{class:'tiles'});
+  t.innerHTML=tile('Viajes',nf.format(sumCant(vs)),n2(sumM3(vs))+' m³ transportados')+
+    tile('Facturación generada',money(ing),plu(vs.length,'registro'),1)+
+    tile('Costos operativos',money(cost),plu(cs.length,'movimiento'))+
+    tile('Margen bruto',money(ing-cost),ing?Math.round((ing-cost)/ing*100)+'% sobre ingresos':'—');
+  c.appendChild(t);
+
+  // estado del trabajo
+  const est=el('div',{class:'card'});
+  est.innerHTML='<h3>Estado de los viajes</h3>';
+  const eb=el('div',{class:'pad stack'});
+  const fila=(lbl_,arr,cls)=>{
+    const pc=sumCant(vs)?Math.round(sumCant(arr)/sumCant(vs)*100):0;
+    return '<div><div class="row" style="gap:8px"><span class="chip '+cls+'">'+lbl_+'</span>'+
+      '<span class="spacer"></span><span class="mono">'+nf.format(sumCant(arr))+' viajes · '+money(sumTot(arr))+'</span></div>'+
+      '<div class="pbar" style="margin-top:5px"><i style="width:'+pc+'%"></i></div></div>';
+  };
+  eb.innerHTML=fila('Por validar',pend,'pen')+fila('Aprobado',apr,'apr')+fila('Facturado',fac,'fac');
+  if(pend.length){
+    const b=el('button',{class:'btn acc',type:'button'},'Ir a validar '+sumCant(pend)+' viaje(s)');
+    b.onclick=()=>{vista='validar';render()};
+    eb.appendChild(b);
+  }
+  est.appendChild(eb);c.appendChild(est);
+
+  // por obra
+  const go={};vs.forEach(v=>{(go[v.obraId]=go[v.obraId]||[]).push(v)});
+  const ro=Object.keys(go).map(k=>{const a=go[k],val=sumTot(a);
+    return{o:esc(nomObra(k)),cl:esc(nomCli(cliDeObra(k))),v:nf.format(sumCant(a)),m3:n2(sumM3(a)),t:money(val),
+      b:'<div class="pbar"><i style="width:'+(ing?Math.round(val/ing*100):0)+'%"></i></div>',_v:val}})
+    .sort((a,b)=>b._v-a._v);
+  const co=el('div',{class:'card'});co.innerHTML='<h3>Producción por obra</h3>';
+  co.appendChild(tablaSimple([{k:'o',l:'Obra'},{k:'cl',l:'Cliente',opt:1},{k:'v',l:'Viajes',num:1},{k:'m3',l:'m³',num:1},{k:'t',l:'Valor',num:1},{k:'b',l:'Part.',opt:1}],ro,
+    {o:'Total',v:nf.format(sumCant(vs)),m3:n2(sumM3(vs)),t:money(ing)}));
+  c.appendChild(co);
+
+  // por volqueta
+  const gv={};vs.forEach(v=>{(gv[v.volquetaId]=gv[v.volquetaId]||[]).push(v)});
+  const rv=Object.keys(gv).map(k=>{
+    const a=gv[k],vo=byId(S.mae.volquetas,k)||{},i=sumTot(a);
+    const co2=cs.filter(x=>x.volquetaId===k).reduce((s,x)=>s+(+x.valor||0),0);
+    const te=vo.tipo==='Tercero'?i*(+vo.porcTercero||0)/100:0;
+    return{p:esc(vo.placa||'Sin volqueta'),v:nf.format(sumCant(a)),m3:n2(sumM3(a)),
+      i:money(i),c:money(co2),te:te?money(te):'—',m:money(i-co2-te),_i:i,_c:co2,_t:te,_m:i-co2-te}})
+    .sort((a,b)=>b._m-a._m);
+  const cv=el('div',{class:'card'});cv.innerHTML='<h3>Rendimiento por volqueta</h3>';
+  cv.appendChild(tablaSimple([{k:'p',l:'Placa'},{k:'v',l:'Viajes',num:1},{k:'m3',l:'m³',num:1,opt:1},{k:'i',l:'Ingreso',num:1},
+    {k:'c',l:'Costos',num:1},{k:'te',l:'Pago tercero',num:1,opt:1},{k:'m',l:'Margen',num:1}],rv,
+    {p:'Total',i:money(rv.reduce((s,x)=>s+x._i,0)),c:money(rv.reduce((s,x)=>s+x._c,0)),
+     te:money(rv.reduce((s,x)=>s+x._t,0)),m:money(rv.reduce((s,x)=>s+x._m,0))}));
+  c.appendChild(cv);
+
+  // conductores
+  const gc={};vs.forEach(v=>{(gc[v.conductorId]=gc[v.conductorId]||[]).push(v)});
+  const rc=Object.keys(gc).map(k=>{
+    const a=gc[k],d=byId(S.mae.conductores,k)||{},i=sumTot(a),cant=sumCant(a);
+    const pago=d.tipoPago==='Porcentaje'?i*(+d.porcentaje||0)/100:cant*(+d.valorViaje||0);
+    const base=d.tipoPago==='Porcentaje'?((+d.porcentaje||0)+'% del flete'):(money(d.valorViaje||0)+' por viaje');
+    return{n:esc(d.nombre||'Sin conductor'),v:nf.format(cant),m3:n2(sumM3(a)),b:esc(base),p:money(pago),_p:pago}})
+    .sort((a,b)=>b._p-a._p);
+  const cc=el('div',{class:'card'});cc.innerHTML='<h3>Pago a conductores</h3>';
+  cc.appendChild(tablaSimple([{k:'n',l:'Conductor'},{k:'v',l:'Viajes',num:1},{k:'m3',l:'m³',num:1,opt:1},{k:'b',l:'Base',opt:1},{k:'p',l:'A pagar',num:1}],rc,
+    {n:'Total',p:money(rc.reduce((s,x)=>s+x._p,0))}));
+  c.appendChild(cc);
+
+  // últimos
+  const ul=el('div',{class:'card'});ul.innerHTML='<h3>Últimos viajes</h3>';
+  const ub=el('div',{class:'stack',style:'padding:12px'});
+  const ord=vs.slice().sort((a,b)=>a.fecha<b.fecha?1:a.fecha>b.fecha?-1:(b.upd||0)-(a.upd||0)).slice(0,6);
+  if(!ord.length)ub.appendChild(el('div',{class:'empty'},'Todavía no hay viajes en el periodo.'));
+  ord.forEach(v=>ub.appendChild(itemViaje(v,false)));
+  ul.appendChild(ub);c.appendChild(ul);
+  return c;
+}
 
 /* ===================== CONDUCTOR ===================== */
 function vRegistrar(){
@@ -563,11 +675,12 @@ function vCostos(){
   const btn=el('button',{class:'btn sm acc',type:'button'},'+ Costo');
   btn.onclick=()=>formCosto();
   c.appendChild(ph('Costos',fFecha(P.from)+' al '+fFecha(P.to),btn));
-  const cs=S.costos.filter(x=>enRango(x)).sort((a,b)=>a.fecha<b.fecha?1:-1);
+  c.appendChild(selectorPeriodo());
+  const cs=S.costos.filter(x=>enRango(x)&&!x.borrado).sort((a,b)=>a.fecha<b.fecha?1:-1);
   const tot=cs.reduce((s,x)=>s+(+x.valor||0),0);
   const porTipo={};cs.forEach(x=>porTipo[x.tipo||'Otros']=(porTipo[x.tipo||'Otros']||0)+(+x.valor||0));
   const t=el('div',{class:'tiles'});
-  t.innerHTML=tile('Total costos',money(tot),cs.length+' movimientos',1)+
+  t.innerHTML=tile('Total costos',money(tot),plu(cs.length,'movimiento'),1)+
     Object.keys(porTipo).map(k=>tile(k,money(porTipo[k]),'')).join('');
   c.appendChild(t);
   const l=el('div',{class:'stack'});
