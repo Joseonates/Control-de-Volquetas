@@ -178,6 +178,44 @@ async function sincronizar(forzar){
 window.addEventListener('online',()=>sincronizar());
 setInterval(()=>{if(document.visibilityState==='visible')sincronizar(true)},45000);
 
+/* ===================== instalación en el celular ===================== */
+let promptInstalar=null, instalaOculto=false;
+const yaInstalada=()=>window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
+const esIOS=()=>/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.maxTouchPoints>1&&/Mac/.test(navigator.userAgent));
+const puedeInstalar=()=>!yaInstalada()&&!instalaOculto&&(!!promptInstalar||esIOS());
+function pintarInstalar(){
+  const b=$('#instala');if(!b)return;
+  const ver=puedeInstalar();
+  b.hidden=!ver;
+  document.body.classList.toggle('coninstala',ver);
+  if(ver&&!promptInstalar&&esIOS()){
+    $('#instalaD').textContent='Desde Safari: Compartir → Agregar a inicio.';
+    $('#instalaOk').textContent='Cómo';
+  }
+}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptInstalar=e;pintarInstalar()});
+window.addEventListener('appinstalled',()=>{promptInstalar=null;pintarInstalar();toast('App instalada en tu celular')});
+async function lanzarInstalacion(){
+  if(promptInstalar){
+    const p=promptInstalar;promptInstalar=null;
+    try{p.prompt();const r=await p.userChoice;if(r&&r.outcome==='accepted')toast('Instalando…')}catch(e){}
+    pintarInstalar();return;
+  }
+  const b=el('div');
+  b.innerHTML='<ol class="pasos">'+
+    (esIOS()
+      ?'<li>Abre esta página en <b>Safari</b> (no en Chrome ni dentro de WhatsApp).</li>'+
+       '<li>Toca el botón <b>Compartir</b>, el cuadrito con la flecha hacia arriba.</li>'+
+       '<li>Baja y elige <b>Agregar a pantalla de inicio</b>.</li>'+
+       '<li>Toca <b>Agregar</b>. El ícono queda junto a tus otras apps.</li>'
+      :'<li>Abre esta página en <b>Chrome</b>.</li>'+
+       '<li>Toca el menú de <b>tres puntos</b> arriba a la derecha.</li>'+
+       '<li>Elige <b>Instalar aplicación</b> o <b>Agregar a pantalla principal</b>.</li>'+
+       '<li>Confirma. El ícono queda junto a tus otras apps.</li>')+
+    '</ol><p style="color:var(--muted);font-size:12.5px;margin-bottom:0">Después ábrela siempre desde el ícono: así funciona a pantalla completa y sin señal.</p>';
+  abrir('Instalar en tu celular',b);
+}
+
 /* ===================== roles y arranque ===================== */
 const esAdmin=()=>S.cfg.rol==='admin';
 const miConductor=()=>byId(S.mae.conductores,S.cfg.conductorId);
@@ -866,6 +904,7 @@ function panelConexion(){
     '<textarea id="xCod" readonly style="margin-top:5px;font-family:var(--mono);font-size:11px"></textarea>'+
     '<div class="row" style="margin-top:8px"><button class="btn sm acc" id="xCopy">Copiar código</button>'+
     '<span style="font-size:12.5px;color:var(--muted)">Envíaselo por WhatsApp. Ellos lo pegan al abrir la app.</span></div></div>'+
+    (yaInstalada()?'':'<div><button class="btn sec" id="xInst" type="button">Instalar la app en este dispositivo</button></div>')+
     '<label class="f" style="flex-direction:row;align-items:center;gap:9px"><input type="checkbox" id="xVer" style="width:auto"'+(S.cfg.verPagoConductor?' checked':'')+'> <span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)">Mostrar a cada conductor su liquidación</span></label>'+
     '</div>';
   const est=$('#xEst',d);
@@ -889,6 +928,7 @@ function panelConexion(){
     try{await navigator.clipboard.writeText(t);toast('Código copiado')}
     catch(e){$('#xCod',d).select();toast('Selecciona y copia el código')}
   };
+  const bi=$('#xInst',d);if(bi)bi.onclick=lanzarInstalacion;
   $('#xVer',d).onchange=async e=>{S.cfg.verPagoConductor=e.target.checked;await guardarCfg();toast('Guardado')};
   return d;
 }
@@ -989,6 +1029,9 @@ async function boot(){
   S.viajes=await dbAll('viajes');S.costos=await dbAll('costos');S.facturas=await dbAll('facturas');
   if(!S.cfg.rol)pintarGate('rol');else iniciar();
   pintarSync();
+  $('#instalaOk').onclick=lanzarInstalacion;
+  $('#instalaNo').onclick=()=>{instalaOculto=true;pintarInstalar()};
+  pintarInstalar();
   if('serviceWorker' in navigator){
     try{await navigator.serviceWorker.register('sw.js')}catch(e){}
   }
