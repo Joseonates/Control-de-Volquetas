@@ -24,6 +24,32 @@ const fld=(l,inner)=>'<label class="f"><span>'+esc(l)+'</span>'+inner+'</label>'
 const plu=(n,s1,s2)=>nf.format(n)+' '+(Math.abs(n)===1?s1:(s2||s1+'s'));
 const tile=(k,v,s,hi)=>'<div class="tile'+(hi?' hi':'')+'"><div class="k">'+esc(k)+'</div><div class="v">'+v+'</div><div class="s">'+esc(s||'')+'</div></div>';
 
+/* ===================== credenciales de conductores =====================
+   La clave no se guarda tal cual: se guarda su huella (hash) con una sal propia
+   de cada conductor. Quien abra la base no lee la clave. Aun así esto es un
+   control de operación, no una seguridad fuerte: ver la nota de la guía. */
+function salAlAzar(){
+  const a=new Uint8Array(8);
+  if(window.crypto&&crypto.getRandomValues)crypto.getRandomValues(a);
+  else for(let i=0;i<8;i++)a[i]=Math.floor(Math.random()*256);
+  return [].map.call(a,b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function huella(sal,clave){
+  const txt='vq1|'+sal+'|'+String(clave||'');
+  if(window.crypto&&crypto.subtle&&crypto.subtle.digest){
+    try{
+      const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(txt));
+      return [].map.call(new Uint8Array(buf),b=>b.toString(16).padStart(2,'0')).join('');
+    }catch(e){}
+  }
+  let h=5381;for(let i=0;i<txt.length;i++)h=((h*33)^txt.charCodeAt(i))>>>0;
+  return 'x'+h.toString(16);
+}
+const PAL=['ruta','vale','obra','carga','volco','flete'];
+function claveNueva(){return PAL[Math.floor(Math.random()*PAL.length)]+Math.floor(1000+Math.random()*9000)}
+const normUsr=u=>String(u||'').trim().toLowerCase();
+const hayCredenciales=()=>!!(S.mae&&(S.mae.conductores||[]).some(c=>c.usuario&&c.clave));
+
 /* ===================== base de datos local ===================== */
 const STORES=['kv','viajes','costos','facturas','fotos'];
 let _db=null;
@@ -43,7 +69,7 @@ async function dbDel(store,id){const d=await idb();return new Promise((res,rej)=
 
 /* ===================== estado ===================== */
 const CFG0={id:'config',empresaId:'',syncUrl:'',authKey:'',rol:'',conductorId:'',pin:'',
-  verPagoConductor:true,ultVolqueta:'',ultObra:'',ultConductor:'',empresa:{nombre:'',nit:'',direccion:'',ciudad:'',telefono:''},
+  auth:false,verPagoConductor:true,ultVolqueta:'',ultObra:'',ultConductor:'',empresa:{nombre:'',nit:'',direccion:'',ciudad:'',telefono:''},
   iva:19,retefuente:1,reteica:0,prefijo:'CC-',consecutivo:1,upd:0};
 const MAE0={id:'maestros',clientes:[],obras:[],volquetas:[],conductores:[],upd:0,dirty:false};
 const S={cfg:null,mae:null,viajes:[],costos:[],facturas:[]};
@@ -187,6 +213,14 @@ async function sincronizar(forzar){
   }catch(e){ultimoError=String(e&&e.message||e)}
   sincronizando=false;pintarSync();
   if(pendientePorSync){pendientePorSync=false;setTimeout(()=>sincronizar(forzar),400);return}
+  // Si la oficina le quitó el acceso o lo desactivó, el conductor sale a la pantalla de entrada.
+  if(S.cfg.rol==='conductor'&&S.cfg.auth){
+    const cd=miConductor();
+    if(!cd||cd.activo===false||!cd.clave){
+      S.cfg.rol='';S.cfg.auth=false;await guardarCfg();
+      cerrar();pintarGate('con2');toast('La oficina cambió tu acceso. Vuelve a entrar.');return;
+    }
+  }
   // Si algo cambió en el servidor, la pantalla se refresca sola (salvo con un diálogo abierto).
   if((forzar||cambios)&&!$('#dlg').open&&S.cfg&&S.cfg.rol)render();
 }
@@ -278,6 +312,33 @@ function pintarGate(paso){
     return;
   }
   if(paso==='con2'){
+    // Con credenciales creadas por la oficina, se entra con usuario y clave.
+    if(hayCredenciales()){
+      c.innerHTML='<h2>Entrar</h2>'+
+        '<p style="color:var(--muted);margin:6px 0 16px">Usa el usuario y la clave que te dio la oficina.</p>'+
+        '<div class="stack">'+
+        fld('Usuario','<input id="lUsr" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="tu usuario">')+
+        fld('Clave','<input id="lCla" type="password" placeholder="tu clave">')+
+        '<button class="btn acc" id="lOk">Entrar</button>'+
+        '<button class="btn sec" id="cBack">Atrás</button></div>'+
+        '<p style="color:var(--muted);font-size:12.5px;margin-top:16px">¿No tienes usuario o se te olvidó la clave? '+
+        'Pídeselos a la oficina: los crea desde Ajustes → Conductores.</p>';
+      const entrar=async()=>{
+        const u=normUsr($('#lUsr').value), k=$('#lCla').value;
+        if(!u||!k){toast('Escribe usuario y clave');return}
+        const cd=(S.mae.conductores||[]).find(x=>normUsr(x.usuario)===u&&x.clave);
+        if(!cd){toast('Usuario o clave incorrectos');return}
+        if(cd.activo===false){toast('Ese usuario está inactivo. Habla con la oficina.');return}
+        const h=await huella(cd.claveSal||'',k);
+        if(h!==cd.clave){toast('Usuario o clave incorrectos');$('#lCla').value='';return}
+        S.cfg.conductorId=cd.id;S.cfg.rol='conductor';S.cfg.auth=true;await guardarCfg();iniciar();
+      };
+      $('#lOk').onclick=entrar;
+      $('#lCla').addEventListener('keydown',e=>{if(e.key==='Enter')entrar()});
+      $('#cBack').onclick=()=>pintarGate('con1');
+      return;
+    }
+    // Todavía sin credenciales: se elige el nombre, como antes.
     const cs=S.mae.conductores.filter(x=>x.activo!==false);
     c.innerHTML='<h2>¿Quién eres?</h2>'+
       '<p style="color:var(--muted);margin:6px 0 16px">Toca tu nombre. Quedará guardado en este teléfono.</p>'+
@@ -285,7 +346,7 @@ function pintarGate(paso){
       '<button class="btn sec" id="cBack" style="margin-top:16px;width:100%">Atrás</button>';
     const L=$('#cList');
     cs.forEach(x=>{const b=el('button',{class:'btn big sec',type:'button'},esc(x.nombre));
-      b.onclick=async()=>{S.cfg.conductorId=x.id;S.cfg.rol='conductor';await guardarCfg();iniciar()};
+      b.onclick=async()=>{S.cfg.conductorId=x.id;S.cfg.rol='conductor';S.cfg.auth=false;await guardarCfg();iniciar()};
       if(L)L.appendChild(b)});
     $('#cBack').onclick=()=>pintarGate('con1');
     return;
@@ -617,6 +678,12 @@ function vMios(){
     });
   }
   c.appendChild(lst);
+  const out=el('button',{class:'btn sec',type:'button',style:'margin-top:6px'},'Cerrar sesión');
+  out.onclick=async()=>{
+    S.cfg.rol='';S.cfg.auth=false;S.cfg.conductorId='';await guardarCfg();
+    pintarGate(conectado()?'con2':'rol');
+  };
+  c.appendChild(out);
   return c;
 }
 function itemViaje(v,corto){
@@ -1152,10 +1219,11 @@ const SCH={
     {k:'tipo',l:'Vinculación',type:'opt',opts:['Propia','Tercero'],def:'Propia'},{k:'propietario',l:'Propietario'},
     {k:'porcTercero',l:'% para el tercero',type:'num'},{k:'activa',l:'Activa',type:'bool',def:true}],
     main:'placa',sub:o=>(o.tipo||'Propia')+(o.capacidad?' · '+n2(o.capacidad)+' m³':'')},
-  conductores:{t:'Conductores',sing:'conductor',f:[{k:'nombre',l:'Nombre',req:1},{k:'doc',l:'Cédula'},{k:'telefono',l:'Teléfono'},
+  conductores:{t:'Conductores',sing:'conductor',f:[{k:'nombre',l:'Nombre',req:1},{k:'usuario',l:'Usuario para entrar'},{k:'doc',l:'Cédula'},{k:'telefono',l:'Teléfono'},
     {k:'tipoPago',l:'Forma de pago',type:'opt',opts:['Por viaje','Porcentaje'],def:'Por viaje'},
     {k:'valorViaje',l:'Pago por viaje',type:'num'},{k:'porcentaje',l:'% sobre el flete',type:'num'},{k:'activo',l:'Activo',type:'bool',def:true}],
-    main:'nombre',sub:o=>o.tipoPago==='Porcentaje'?(+o.porcentaje||0)+'% del flete':money(o.valorViaje)+' por viaje'}
+    main:'nombre',sub:o=>(o.tipoPago==='Porcentaje'?(+o.porcentaje||0)+'% del flete':money(o.valorViaje)+' por viaje')+
+      (o.usuario&&o.clave?'  ·  entra como '+o.usuario:'  ·  sin acceso a la app')}
 };
 function panelMaestro(ent){
   const s=SCH[ent],arr=S.mae[ent]||[];
@@ -1185,18 +1253,72 @@ function formMaestro(ent,it){
     else inner='<input id="m_'+f.k+'" value="'+esc(it[f.k]||'')+'">';
     h+=fld(f.l,inner);
   }
-  h+='</div><div class="row" style="margin-top:14px"><button class="btn acc" id="mOk" style="flex:1">Guardar</button><button class="btn sec" id="mC">Cancelar</button>'+
+  h+='</div>';
+  if(ent==='conductores')h+='<div class="card" style="margin-top:14px"><h3>Acceso a la app</h3><div class="pad" id="acc"></div></div>';
+  h+='<div class="row" style="margin-top:14px"><button class="btn acc" id="mOk" style="flex:1">Guardar</button><button class="btn sec" id="mC">Cancelar</button>'+
     (it.id?'<button class="btn bad" id="mD">Eliminar</button>':'')+'</div>';
   b.innerHTML=h;
+
+  // credenciales del conductor: se generan aquí y se guardan con el botón Guardar
+  let clave=it.clave||'', claveSal=it.claveSal||'', claveVisible='';
+  if(ent==='conductores'){
+    const pintarAcc=()=>{
+      const z=$('#acc',b);
+      const usr=($('#m_usuario',b).value||'').trim();
+      let x='';
+      if(claveVisible){
+        x='<div class="note"><b>Clave nueva:</b> <span class="mono" style="font-size:16px">'+esc(claveVisible)+'</span><br>'+
+          'Anótala o cópiala ahora: después ya no se puede ver, solo generar otra.</div>'+
+          '<div class="row" style="margin-top:10px"><button class="btn sm acc" id="accCopy" type="button">Copiar mensaje para el conductor</button></div>';
+      }else{
+        x='<p style="margin:0 0 10px;color:var(--muted);font-size:13px">'+
+          (clave?'Este conductor entra con el usuario <b>'+esc(usr||it.usuario||'—')+'</b> y su clave.'
+                :'Todavía no tiene clave, así que no puede entrar a la app.')+'</p>';
+      }
+      x+='<div class="row" style="margin-top:8px">'+
+         '<button class="btn sm sec" id="accGen" type="button">'+(clave?'Generar clave nueva':'Crear usuario y clave')+'</button>'+
+         (clave?'<button class="btn sm bad" id="accDel" type="button">Quitar acceso</button>':'')+'</div>';
+      z.innerHTML=x;
+      const g=$('#accGen',z);
+      g.onclick=async()=>{
+        let u=($('#m_usuario',b).value||'').trim();
+        if(!u){
+          u=normUsr(($('#m_nombre',b).value||'').split(' ')[0]).replace(/[^a-z0-9]/g,'');
+          $('#m_usuario',b).value=u;
+        }
+        if(!u){toast('Escribe primero el nombre o el usuario');return}
+        const otro=(S.mae.conductores||[]).find(c=>c.id!==it.id&&normUsr(c.usuario)===normUsr(u));
+        if(otro){toast('Ese usuario ya lo tiene '+otro.nombre);return}
+        claveVisible=claveNueva();claveSal=salAlAzar();clave=await huella(claveSal,claveVisible);
+        pintarAcc();
+      };
+      const d=$('#accDel',z);
+      if(d)d.onclick=()=>{clave='';claveSal='';claveVisible='';pintarAcc()};
+      const cp=$('#accCopy',z);
+      if(cp)cp.onclick=async()=>{
+        const msg='App de volquetas\nUsuario: '+(($('#m_usuario',b).value||'').trim())+'\nClave: '+claveVisible;
+        try{await navigator.clipboard.writeText(msg);toast('Mensaje copiado')}catch(e){toast('Anota: '+claveVisible)}
+      };
+    };
+    pintarAcc();
+  }
+
   $('#mC',b).onclick=cerrar;
   const dl=$('#mD',b);
   if(dl)dl.onclick=async()=>{S.mae[ent]=S.mae[ent].filter(x=>x.id!==it.id);await guardarMae();cerrar();render();toast('Eliminado')};
   $('#mOk',b).onclick=async()=>{
-    const o={id:it.id||uid(ent[0])};
+    const o=Object.assign({},it,{id:it.id||uid(ent[0])});
     for(const f of s.f){const n=$('#m_'+f.k,b);
       o[f.k]=f.type==='bool'?n.checked:f.type==='num'?(n.value===''?null:+n.value):n.value.trim()}
     const req=s.f.find(f=>f.req&&!o[f.k]);
     if(req){toast('Falta: '+req.l);return}
+    if(ent==='conductores'){
+      o.usuario=normUsr(o.usuario);
+      o.clave=clave;o.claveSal=claveSal;
+      if(o.clave&&!o.usuario){toast('Escribe el usuario con el que va a entrar');return}
+      const otro=(S.mae.conductores||[]).find(c=>c.id!==o.id&&o.usuario&&normUsr(c.usuario)===o.usuario);
+      if(otro){toast('Ese usuario ya lo tiene '+otro.nombre);return}
+    }
     const arr=S.mae[ent]||(S.mae[ent]=[]);
     const i=arr.findIndex(x=>x.id===o.id);
     if(i<0)arr.push(o);else arr[i]=o;
@@ -1213,7 +1335,10 @@ async function boot(){
   S.mae=Object.assign({},MAE0,(await dbGet('kv','maestros'))||{});
   ['clientes','obras','volquetas','conductores'].forEach(k=>{if(!Array.isArray(S.mae[k]))S.mae[k]=[]});
   S.viajes=await dbAll('viajes');S.costos=await dbAll('costos');S.facturas=await dbAll('facturas');
-  if(!S.cfg.rol)pintarGate('rol');else iniciar();
+  // Si la oficina ya creó credenciales, el conductor tiene que entrar con las suyas.
+  if(!S.cfg.rol)pintarGate('rol');
+  else if(S.cfg.rol==='conductor'&&hayCredenciales()&&!S.cfg.auth)pintarGate('con2');
+  else iniciar();
   pintarSync();
   $('#instalaOk').onclick=lanzarInstalacion;
   $('#instalaNo').onclick=()=>{instalaOculto=true;pintarInstalar()};
