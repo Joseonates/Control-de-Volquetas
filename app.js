@@ -389,6 +389,17 @@ function vTablero(){
     tile('Margen bruto',money(ing-cost),ing?Math.round((ing-cost)/ing*100)+'% sobre ingresos':'—');
   c.appendChild(t);
 
+  // viajes a los que les falta la placa o el conductor
+  const inc=vs.filter(v=>!v.volquetaId||!v.conductorId);
+  if(inc.length){
+    const n=el('div',{class:'note bad'});
+    n.innerHTML='<b>'+sumCant(inc)+' viaje(s) sin placa o sin conductor.</b> Por eso no aparecen '+
+      'en el rendimiento por volqueta ni en el pago a conductores. '+
+      '<button class="btn sm sec" id="tInc" type="button" style="margin-top:8px">Ver y corregir</button>';
+    n.querySelector('#tInc').onclick=()=>{fEstado='incompletos';vista='viajes';render()};
+    c.appendChild(n);
+  }
+
   // estado del trabajo
   const est=el('div',{class:'card'});
   est.innerHTML='<h3>Estado de los viajes</h3>';
@@ -801,7 +812,7 @@ function vViajes(){
   const per=el('div',{class:'card'});
   per.innerHTML='<div class="pad gf">'+fld('Desde','<input type="date" id="pD" value="'+P.from+'">')+
     fld('Hasta','<input type="date" id="pH" value="'+P.to+'">')+
-    fld('Estado','<select id="pE"><option value="todos">Todos</option><option value="pendiente">Por validar</option><option value="aprobado">Aprobados</option><option value="rechazado">Rechazados</option><option value="facturado">Facturados</option></select>')+'</div>';
+    fld('Estado','<select id="pE"><option value="todos">Todos</option><option value="pendiente">Por validar</option><option value="aprobado">Aprobados</option><option value="rechazado">Rechazados</option><option value="facturado">Facturados</option><option value="incompletos">Sin placa o sin conductor</option></select>')+'</div>';
   $('#pD',per).onchange=e=>{P.from=e.target.value;render()};
   $('#pH',per).onchange=e=>{P.to=e.target.value;render()};
   $('#pE',per).value=fEstado;
@@ -809,7 +820,8 @@ function vViajes(){
   c.appendChild(per);
 
   let vs=S.viajes.filter(v=>enRango(v)&&!v.borrado);
-  if(fEstado!=='todos')vs=vs.filter(v=>(v.estado||'pendiente')===fEstado);
+  if(fEstado==='incompletos')vs=vs.filter(v=>!v.volquetaId||!v.conductorId);
+  else if(fEstado!=='todos')vs=vs.filter(v=>(v.estado||'pendiente')===fEstado);
   vs.sort((a,b)=>a.fecha<b.fecha?1:a.fecha>b.fecha?-1:0);
   const apr=vs.filter(v=>v.estado==='aprobado');
   const t=el('div',{class:'tiles'});
