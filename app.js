@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='7';
+const VERSION='8';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -187,14 +187,14 @@ async function sincronizar(forzar){
   if(!conectado()){pintarSync();return}
   if(sincronizando){pendientePorSync=true;return}
   sincronizando=true;pintarSync();
-  let cambios=false;
+  let cambios=false, subio=false;
   try{
     // 1. subir lo pendiente
-    for(const v of S.viajes.filter(x=>x.dirty)){const c=Object.assign({},v);delete c.dirty;await enviar('viajes/'+v.id,c);v.dirty=false;await dbPut('viajes',v)}
-    for(const c of S.costos.filter(x=>x.dirty)){const o=Object.assign({},c);delete o.dirty;await enviar('costos/'+c.id,o);c.dirty=false;await dbPut('costos',c)}
-    for(const f of S.facturas.filter(x=>x.dirty)){const o=Object.assign({},f);delete o.dirty;await enviar('facturas/'+f.id,o);f.dirty=false;await dbPut('facturas',f)}
-    for(const f of (await dbAll('fotos')).filter(x=>x.dirty)){const o={b64:f.b64,upd:f.upd};await enviar('fotos/'+f.id,o);f.dirty=false;await dbPut('fotos',f)}
-    if(S.mae.dirty&&esAdmin()){const o=Object.assign({},S.mae);delete o.dirty;await enviar('maestros',o);S.mae.dirty=false;await dbPut('kv',S.mae)}
+    for(const v of S.viajes.filter(x=>x.dirty)){const c=Object.assign({},v);delete c.dirty;await enviar('viajes/'+v.id,c);subio=true;v.dirty=false;await dbPut('viajes',v)}
+    for(const c of S.costos.filter(x=>x.dirty)){const o=Object.assign({},c);delete o.dirty;await enviar('costos/'+c.id,o);subio=true;c.dirty=false;await dbPut('costos',c)}
+    for(const f of S.facturas.filter(x=>x.dirty)){const o=Object.assign({},f);delete o.dirty;await enviar('facturas/'+f.id,o);subio=true;f.dirty=false;await dbPut('facturas',f)}
+    for(const f of (await dbAll('fotos')).filter(x=>x.dirty)){const o={b64:f.b64,upd:f.upd};await enviar('fotos/'+f.id,o);subio=true;f.dirty=false;await dbPut('fotos',f)}
+    if(S.mae.dirty&&esAdmin()){const o=Object.assign({},S.mae);delete o.dirty;await enviar('maestros',o);subio=true;S.mae.dirty=false;await dbPut('kv',S.mae)}
     // 2. bajar novedades
     const rm=await traer('maestros');
     if(rm&&!S.mae.dirty&&((+rm.ver||0)!==(+S.mae.ver||0)||(+rm.upd||0)!==(+S.mae.upd||0))){
@@ -214,6 +214,8 @@ async function sincronizar(forzar){
         }
       }
     }
+    // Si subimos algo, avisamos a los demás equipos; si no, tomamos nota del latido actual.
+    if(subio)await tocarLatido(); else await leerLatido();
     ultimoError='';
   }catch(e){ultimoError=String(e&&e.message||e)}
   sincronizando=false;pintarSync();
@@ -229,9 +231,30 @@ async function sincronizar(forzar){
   // Si algo cambió en el servidor, la pantalla se refresca sola (salvo con un diálogo abierto).
   if((forzar||cambios)&&!$('#dlg').open&&S.cfg&&S.cfg.rol)render();
 }
+/* El "latido" es un dato diminuto que cambia cada vez que alguien guarda algo.
+   Se consulta cada pocos segundos (pesa nada) y solo cuando cambió se bajan
+   los datos completos. Así el tablero reacciona casi de inmediato sin gastar
+   los datos del celular del conductor. */
+let latidoVisto=null;
+async function tocarLatido(){
+  const v={t:now(),r:Math.random().toString(36).slice(2,8)};
+  try{await enviar('latido',v);latidoVisto=JSON.stringify(v)}catch(e){}
+}
+async function leerLatido(){
+  try{latidoVisto=JSON.stringify(await traer('latido'))}catch(e){}
+}
+async function revisarLatido(){
+  if(!conectado()||sincronizando||document.visibilityState!=='visible')return;
+  try{
+    const s=JSON.stringify(await traer('latido'));
+    if(latidoVisto===null){latidoVisto=s;return}
+    if(s!==latidoVisto){latidoVisto=s;await sincronizar(true)}
+  }catch(e){}
+}
 window.addEventListener('online',()=>sincronizar(true));
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sincronizar(true)});
-setInterval(()=>{if(document.visibilityState==='visible')sincronizar()},30000);
+setInterval(revisarLatido,6000);
+setInterval(()=>{if(document.visibilityState==='visible')sincronizar()},60000);
 
 /* ===================== instalación en el celular ===================== */
 let promptInstalar=null, instalaOculto=false;
@@ -439,7 +462,9 @@ function selectorPeriodo(){
 }
 function vTablero(){
   const c=el('div',{class:'stack'});
-  c.appendChild(ph('Tablero','Del '+fFecha(P.from)+' al '+fFecha(P.to)));
+  const bAct=el('button',{class:'btn sm sec',type:'button'},'Actualizar');
+  bAct.onclick=async()=>{toast('Buscando novedades…');await sincronizar(true)};
+  c.appendChild(ph('Tablero','Del '+fFecha(P.from)+' al '+fFecha(P.to),bAct));
   c.appendChild(selectorPeriodo());
 
   const vs=S.viajes.filter(v=>enRango(v)&&!v.borrado);
