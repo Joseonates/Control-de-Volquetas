@@ -1,7 +1,7 @@
 /* Service worker: deja que la app abra sin señal y garantiza que las
    actualizaciones lleguen. El número al final del nombre cambia en cada
    versión, así el celular descarta la caché vieja. */
-const VER = 'volquetas-v8';
+const VER = 'volquetas-v9';
 const CORE = [
   './',
   './index.html',

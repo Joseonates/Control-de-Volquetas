@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='8';
+const VERSION='9';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -90,10 +90,28 @@ const nomVol=id=>{const v=byId(S.mae.volquetas,id);return v?v.placa:'—'};
 const nomCon=id=>{const c=byId(S.mae.conductores,id);return c?c.nombre:'—'};
 const cliDeObra=id=>{const o=byId(S.mae.obras,id);return o?o.clienteId:null};
 
+/* Cada viaje guarda, además del identificador, el nombre de la obra, la placa,
+   el conductor y la tarifa que se le aplicó. Así el registro se sostiene solo
+   aunque después se borre o se cambie un maestro, y una factura vieja no cambia
+   de precio si mañana se sube la tarifa. */
+const tObra=v=>{const o=byId(S.mae.obras,v.obraId);return o?o.nombre:(v.obraNombre||'—')};
+const tVol=v=>{const o=byId(S.mae.volquetas,v.volquetaId);return o?o.placa:(v.placa||'')};
+const tCon=v=>{const o=byId(S.mae.conductores,v.conductorId);return o?o.nombre:(v.conductorNombre||'')};
+const tCli=v=>{const o=byId(S.mae.obras,v.obraId);const c=byId(S.mae.clientes,(o&&o.clienteId)||v.clienteId);
+  return c?c.nombre:(v.clienteNombre||'—')};
+const tCliId=v=>{const o=byId(S.mae.obras,v.obraId);return (o&&o.clienteId)||v.clienteId||''};
+const kObra=v=>v.obraId||('n:'+(v.obraNombre||'—'));
+const kVol=v=>v.volquetaId||('n:'+(v.placa||''));
+const kCon=v=>v.conductorId||('n:'+(v.conductorNombre||''));
+/* ¿A este viaje le falta algo para poder cobrarlo o liquidarlo? */
+const viajeIncompleto=v=>!v.obraId||!byId(S.mae.obras,v.obraId)||!v.volquetaId||!byId(S.mae.volquetas,v.volquetaId)||
+  !v.conductorId||!byId(S.mae.conductores,v.conductorId)||!calcViaje(v).total;
+
 function calcViaje(v){
   const o=byId(S.mae.obras,v.obraId)||{};
-  const vv=v.valorViaje!=null?+v.valorViaje:+(o.valorViaje||0);
-  const vm=v.valorM3!=null?+v.valorM3:+(o.valorM3||0);
+  // La tarifa guardada con el viaje manda; si no la tiene (registros viejos), se toma la de la obra.
+  const vv=v.valorViaje!=null&&v.valorViaje!==''?+v.valorViaje:+(o.valorViaje||0);
+  const vm=v.valorM3!=null&&v.valorM3!==''?+v.valorM3:+(o.valorM3||0);
   const cant=+(v.cant||1),m3=+(v.m3||0);
   return {vv,vm,cant,m3,m3Tot:cant*m3,total:cant*vv+cant*m3*vm};
 }
@@ -482,11 +500,11 @@ function vTablero(){
   c.appendChild(t);
 
   // viajes a los que les falta la placa o el conductor
-  const inc=vs.filter(v=>!v.volquetaId||!v.conductorId);
+  const inc=vs.filter(viajeIncompleto);
   if(inc.length){
     const n=el('div',{class:'note bad'});
-    n.innerHTML='<b>'+sumCant(inc)+' viaje(s) sin placa o sin conductor.</b> Por eso no aparecen '+
-      'en el rendimiento por volqueta ni en el pago a conductores. '+
+    n.innerHTML='<b>'+sumCant(inc)+' viaje(s) incompletos o en $ 0.</b> Les falta la obra, la placa o el '+
+      'conductor, o apuntan a uno que ya no existe. Por eso no suman en las tablas. '+
       '<button class="btn sm sec" id="tInc" type="button" style="margin-top:8px">Ver y corregir</button>';
     n.querySelector('#tInc').onclick=()=>{fEstado='incompletos';vista='viajes';render()};
     c.appendChild(n);
@@ -511,9 +529,9 @@ function vTablero(){
   est.appendChild(eb);c.appendChild(est);
 
   // por obra
-  const go={};vs.forEach(v=>{(go[v.obraId]=go[v.obraId]||[]).push(v)});
+  const go={};vs.forEach(v=>{(go[kObra(v)]=go[kObra(v)]||[]).push(v)});
   const ro=Object.keys(go).map(k=>{const a=go[k],val=sumTot(a);
-    return{o:esc(nomObra(k)),cl:esc(nomCli(cliDeObra(k))),v:nf.format(sumCant(a)),m3:n2(sumM3(a)),t:money(val),
+    return{o:esc(tObra(a[0])),cl:esc(tCli(a[0])),v:nf.format(sumCant(a)),m3:n2(sumM3(a)),t:money(val),
       b:'<div class="pbar"><i style="width:'+(ing?Math.round(val/ing*100):0)+'%"></i></div>',_v:val}})
     .sort((a,b)=>b._v-a._v);
   const co=el('div',{class:'card'});co.innerHTML='<h3>Producción por obra</h3>';
@@ -522,12 +540,12 @@ function vTablero(){
   c.appendChild(co);
 
   // por volqueta
-  const gv={};vs.forEach(v=>{(gv[v.volquetaId]=gv[v.volquetaId]||[]).push(v)});
+  const gv={};vs.forEach(v=>{(gv[kVol(v)]=gv[kVol(v)]||[]).push(v)});
   const rv=Object.keys(gv).map(k=>{
-    const a=gv[k],vo=byId(S.mae.volquetas,k)||{},i=sumTot(a);
-    const co2=cs.filter(x=>x.volquetaId===k).reduce((s,x)=>s+(+x.valor||0),0);
+    const a=gv[k],vo=byId(S.mae.volquetas,a[0].volquetaId)||{},i=sumTot(a);
+    const co2=cs.filter(x=>x.volquetaId===a[0].volquetaId).reduce((s,x)=>s+(+x.valor||0),0);
     const te=vo.tipo==='Tercero'?i*(+vo.porcTercero||0)/100:0;
-    return{p:esc(vo.placa||'Sin volqueta'),v:nf.format(sumCant(a)),m3:n2(sumM3(a)),
+    return{p:esc(tVol(a[0])||'Sin volqueta'),v:nf.format(sumCant(a)),m3:n2(sumM3(a)),
       i:money(i),c:money(co2),te:te?money(te):'—',m:money(i-co2-te),_i:i,_c:co2,_t:te,_m:i-co2-te}})
     .sort((a,b)=>b._m-a._m);
   const cv=el('div',{class:'card'});cv.innerHTML='<h3>Rendimiento por volqueta</h3>';
@@ -538,12 +556,12 @@ function vTablero(){
   c.appendChild(cv);
 
   // conductores
-  const gc={};vs.forEach(v=>{(gc[v.conductorId]=gc[v.conductorId]||[]).push(v)});
+  const gc={};vs.forEach(v=>{(gc[kCon(v)]=gc[kCon(v)]||[]).push(v)});
   const rc=Object.keys(gc).map(k=>{
-    const a=gc[k],d=byId(S.mae.conductores,k)||{},i=sumTot(a),cant=sumCant(a);
+    const a=gc[k],d=byId(S.mae.conductores,a[0].conductorId)||{},i=sumTot(a),cant=sumCant(a);
     const pago=d.tipoPago==='Porcentaje'?i*(+d.porcentaje||0)/100:cant*(+d.valorViaje||0);
     const base=d.tipoPago==='Porcentaje'?((+d.porcentaje||0)+'% del flete'):(money(d.valorViaje||0)+' por viaje');
-    return{n:esc(d.nombre||'Sin conductor'),v:nf.format(cant),m3:n2(sumM3(a)),b:esc(base),p:money(pago),_p:pago}})
+    return{n:esc(tCon(a[0])||'Sin conductor'),v:nf.format(cant),m3:n2(sumM3(a)),b:esc(base),p:money(pago),_p:pago}})
     .sort((a,b)=>b._p-a._p);
   const cc=el('div',{class:'card'});cc.innerHTML='<h3>Pago a conductores</h3>';
   cc.appendChild(tablaSimple([{k:'n',l:'Conductor'},{k:'v',l:'Viajes',num:1},{k:'m3',l:'m³',num:1,opt:1},{k:'b',l:'Base',opt:1},{k:'p',l:'A pagar',num:1}],rc,
@@ -684,9 +702,9 @@ function vMios(){
     const bl=barras(porMes?'Mes a mes':'Día a día',filas);
     if(bl)c.appendChild(bl);
 
-    const go={};mios.forEach(v=>{(go[v.obraId]=go[v.obraId]||[]).push(v)});
+    const go={};mios.forEach(v=>{(go[kObra(v)]=go[kObra(v)]||[]).push(v)});
     const fo=Object.keys(go).map(k=>{const a=go[k];
-      return{l:nomObra(k),v:sumCant(a),r:nf.format(sumCant(a))+' viajes · '+n2(sumM3(a))+' m³'}})
+      return{l:tObra(a[0]),v:sumCant(a),r:nf.format(sumCant(a))+' viajes · '+n2(sumM3(a))+' m³'}})
       .sort((a,b)=>b.v-a.v);
     const bo=barras('Por obra',fo);
     if(bo)c.appendChild(bo);
@@ -731,11 +749,11 @@ function itemViaje(v,corto){
   else{const x=el('div',{class:'thumb',style:'display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;text-align:center;cursor:default'},'sin<br>foto');th.appendChild(x)}
   d.appendChild(th);
   const m=el('div',{class:'m'});
-  const placa=v.volquetaId?nomVol(v.volquetaId):'sin placa';
-  const cond=v.conductorId?nomCon(v.conductorId):'sin conductor';
-  m.innerHTML='<div class="t">'+esc(nomObra(v.obraId))+'</div>'+
+  const placa=tVol(v)||'sin placa';
+  const cond=tCon(v)||'sin conductor';
+  m.innerHTML='<div class="t">'+esc(tObra(v))+'</div>'+
     '<div class="d">'+fFecha(v.fecha)+' · Vale '+esc(v.vale||'s/n')+'</div>'+
-    '<div class="d">'+(v.volquetaId?'':'<span style="color:var(--bad)">')+esc(placa)+(v.volquetaId?'':'</span>')+
+    '<div class="d">'+(tVol(v)?'':'<span style="color:var(--bad)">')+esc(placa)+(tVol(v)?'':'</span>')+
       ' · '+esc(cond)+'</div>'+
     '<div class="d">'+nf.format(k.cant)+' viaje(s) · '+n2(k.m3Tot)+' m³</div>'+
     '<div style="margin-top:6px">'+chipE(v.estado)+(v.dirty?' <span class="chip neu">Por enviar</span>':'')+'</div>'+
@@ -818,9 +836,18 @@ function formViaje(v){
     if(!g('fVol').value){toast('Selecciona la placa de la volqueta');g('fVol').focus();return}
     const cid=esAdmin()?(g('fCon')?g('fCon').value:conId):S.cfg.conductorId;
     if(!cid){toast('Selecciona el conductor');return}
+    const ob=byId(S.mae.obras,g('fObra').value)||{};
+    const vo=byId(S.mae.volquetas,g('fVol').value)||{};
+    const co=byId(S.mae.conductores,cid)||{};
+    const cl=byId(S.mae.clientes,ob.clienteId)||{};
     const nv=Object.assign({},v,{
       id:v.id||uid('t'),fecha:g('fFecha').value||hoy(),vale:g('fVale').value.trim(),
       obraId:g('fObra').value,volquetaId:g('fVol').value,conductorId:cid,
+      // copia de seguridad dentro del propio viaje
+      obraNombre:ob.nombre||v.obraNombre||'',destino:ob.destino||v.destino||'',
+      clienteId:ob.clienteId||v.clienteId||'',clienteNombre:cl.nombre||v.clienteNombre||'',
+      placa:vo.placa||v.placa||'',conductorNombre:co.nombre||v.conductorNombre||'',
+      valorViaje:+(ob.valorViaje||0),valorM3:+(ob.valorM3||0),
       cant:Math.max(1,+g('fCant').value||1),m3:+g('fM3').value||0,
       obs:g('fObs').value.trim(),fotoId:fotoId,
       creadoPor:v.creadoPor||(esAdmin()?'admin':'conductor'),
@@ -916,7 +943,7 @@ function vViajes(){
   const per=el('div',{class:'card'});
   per.innerHTML='<div class="pad gf">'+fld('Desde','<input type="date" id="pD" value="'+P.from+'">')+
     fld('Hasta','<input type="date" id="pH" value="'+P.to+'">')+
-    fld('Estado','<select id="pE"><option value="todos">Todos</option><option value="pendiente">Por validar</option><option value="aprobado">Aprobados</option><option value="rechazado">Rechazados</option><option value="facturado">Facturados</option><option value="incompletos">Sin placa o sin conductor</option></select>')+'</div>';
+    fld('Estado','<select id="pE"><option value="todos">Todos</option><option value="pendiente">Por validar</option><option value="aprobado">Aprobados</option><option value="rechazado">Rechazados</option><option value="facturado">Facturados</option><option value="incompletos">Incompletos o en $ 0</option></select>')+'</div>';
   $('#pD',per).onchange=e=>{P.from=e.target.value;render()};
   $('#pH',per).onchange=e=>{P.to=e.target.value;render()};
   $('#pE',per).value=fEstado;
@@ -924,7 +951,7 @@ function vViajes(){
   c.appendChild(per);
 
   let vs=S.viajes.filter(v=>enRango(v)&&!v.borrado);
-  if(fEstado==='incompletos')vs=vs.filter(v=>!v.volquetaId||!v.conductorId);
+  if(fEstado==='incompletos')vs=vs.filter(viajeIncompleto);
   else if(fEstado!=='todos')vs=vs.filter(v=>(v.estado||'pendiente')===fEstado);
   vs.sort((a,b)=>a.fecha<b.fecha?1:a.fecha>b.fecha?-1:0);
   const apr=vs.filter(v=>v.estado==='aprobado');
@@ -936,11 +963,11 @@ function vViajes(){
   c.appendChild(t);
 
   // resumen por obra
-  const gr={};vs.forEach(v=>{(gr[v.obraId]=gr[v.obraId]||[]).push(v)});
+  const gr={};vs.forEach(v=>{(gr[kObra(v)]=gr[kObra(v)]||[]).push(v)});
   const cd=el('div',{class:'card'});
   cd.innerHTML='<h3>Por obra</h3>';
   let h='<div class="tw"><table><thead><tr><th>Obra</th><th class="num">Viajes</th><th class="num">m³</th><th class="num">Valor</th></tr></thead><tbody>';
-  for(const k in gr){const a=gr[k];h+='<tr><td>'+esc(nomObra(k))+'</td><td class="num">'+nf.format(sumCant(a))+'</td><td class="num">'+n2(sumM3(a))+'</td><td class="num">'+money(sumTot(a))+'</td></tr>'}
+  for(const k in gr){const a=gr[k];h+='<tr><td>'+esc(tObra(a[0]))+'</td><td class="num">'+nf.format(sumCant(a))+'</td><td class="num">'+n2(sumM3(a))+'</td><td class="num">'+money(sumTot(a))+'</td></tr>'}
   h+='</tbody><tfoot><tr><td>Total</td><td class="num">'+nf.format(sumCant(vs))+'</td><td class="num">'+n2(sumM3(vs))+'</td><td class="num">'+money(sumTot(vs))+'</td></tr></tfoot></table></div>';
   cd.appendChild(el('div',null,h));
   c.appendChild(cd);
@@ -1130,10 +1157,11 @@ function eliminarFactura(f){
 function docFactura(f){
   const e=S.cfg.empresa||{},cli=byId(S.mae.clientes,f.clienteId)||{};
   const vs=(f.viajeIds||[]).map(i=>byId(S.viajes,i)).filter(Boolean);
-  const gr={};vs.forEach(v=>{(gr[v.obraId]=gr[v.obraId]||[]).push(v)});
+  const gr={};vs.forEach(v=>{(gr[kObra(v)]=gr[kObra(v)]||[]).push(v)});
   let det='';
-  for(const k in gr){const a=gr[k],o=byId(S.mae.obras,k)||{},c=calcViaje(a[0]);
-    det+='<tr><td><b>'+esc(o.nombre||'Obra')+'</b><br><span style="color:#5A615A">Transporte y disposición de escombros'+(o.destino?' — '+esc(o.destino):'')+'</span></td>'+
+  for(const k in gr){const a=gr[k],o=byId(S.mae.obras,a[0].obraId)||{},c=calcViaje(a[0]);
+    const dest=o.destino||a[0].destino||'';
+    det+='<tr><td><b>'+esc(tObra(a[0]))+'</b><br><span style="color:#5A615A">Transporte y disposición de escombros'+(dest?' — '+esc(dest):'')+'</span></td>'+
       '<td style="text-align:right">'+nf.format(sumCant(a))+'</td><td style="text-align:right">'+n2(sumM3(a))+'</td>'+
       '<td style="text-align:right">'+nf.format(c.vv)+' / '+nf.format(c.vm)+'</td>'+
       '<td style="text-align:right">'+money(sumTot(a))+'</td></tr>'}
