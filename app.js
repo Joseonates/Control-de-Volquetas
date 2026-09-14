@@ -43,7 +43,7 @@ async function dbDel(store,id){const d=await idb();return new Promise((res,rej)=
 
 /* ===================== estado ===================== */
 const CFG0={id:'config',empresaId:'',syncUrl:'',authKey:'',rol:'',conductorId:'',pin:'',
-  verPagoConductor:false,empresa:{nombre:'',nit:'',direccion:'',ciudad:'',telefono:''},
+  verPagoConductor:true,empresa:{nombre:'',nit:'',direccion:'',ciudad:'',telefono:''},
   iva:19,retefuente:1,reteica:0,prefijo:'CC-',consecutivo:1,upd:0};
 const MAE0={id:'maestros',clientes:[],obras:[],volquetas:[],conductores:[],upd:0,dirty:false};
 const S={cfg:null,mae:null,viajes:[],costos:[],facturas:[]};
@@ -304,7 +304,7 @@ async function salirDeRol(){
 
 /* ===================== navegación ===================== */
 let vista='registrar';
-const NAV_CON=[['registrar','Registrar'],['mios','Mis viajes']];
+const NAV_CON=[['registrar','Registrar'],['mios','Mi trabajo']];
 const NAV_ADM=[['tablero','Tablero'],['validar','Validar'],['viajes','Viajes'],['costos','Costos'],['cobro','Cobro'],['ajustes','Ajustes']];
 function pintarBar(){
   const bar=$('#bar');bar.innerHTML='';
@@ -466,29 +466,130 @@ function vRegistrar(){
   c.appendChild(l);
   return c;
 }
+/* ---------- historial del conductor: hoy, semana, mes, año ---------- */
+const MESES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const MESC=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+const DIAS=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+const pad2=x=>String(x).padStart(2,'0');
+const fISO=d=>d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+const desdeISO=s=>{const p=String(s).split('-');return new Date(+p[0],+p[1]-1,+p[2])};
+const PC={k:'hoy',from:'',to:''};
+function aplicarPreset(k){
+  PC.k=k;const h=new Date();
+  if(k==='hoy'){PC.from=PC.to=hoy();return}
+  if(k==='semana'){const d=new Date(h);d.setDate(d.getDate()-((d.getDay()+6)%7));
+    const e=new Date(d);e.setDate(d.getDate()+6);PC.from=fISO(d);PC.to=fISO(e);return}
+  if(k==='mes'){PC.from=fISO(new Date(h.getFullYear(),h.getMonth(),1));PC.to=fISO(new Date(h.getFullYear(),h.getMonth()+1,0));return}
+  if(k==='anio'){PC.from=h.getFullYear()+'-01-01';PC.to=h.getFullYear()+'-12-31';return}
+  PC.from='0000-01-01';PC.to='9999-12-31';
+}
+function rotuloPeriodo(){
+  const h=new Date();
+  if(PC.k==='hoy')return DIAS[h.getDay()][0].toUpperCase()+DIAS[h.getDay()].slice(1)+' '+fFecha(hoy());
+  if(PC.k==='semana')return 'Del '+fFecha(PC.from)+' al '+fFecha(PC.to);
+  if(PC.k==='mes')return MESES[h.getMonth()][0].toUpperCase()+MESES[h.getMonth()].slice(1)+' de '+h.getFullYear();
+  if(PC.k==='anio')return 'Año '+h.getFullYear();
+  return 'Todo el historial';
+}
+function pagoDe(d,vs){
+  if(!d)return 0;
+  if(d.tipoPago==='Porcentaje')return sumTot(vs)*(+d.porcentaje||0)/100;
+  return sumCant(vs)*(+d.valorViaje||0);
+}
+function barras(titulo,filas){
+  if(!filas.length)return null;
+  const max=Math.max.apply(null,filas.map(f=>f.v))||1;
+  const d=el('div',{class:'card'});
+  d.innerHTML='<h3>'+esc(titulo)+'</h3>';
+  const b=el('div',{class:'pad stack',style:'gap:9px'});
+  b.innerHTML=filas.map(f=>
+    '<div><div class="row" style="gap:8px"><span style="font-size:13px">'+esc(f.l)+'</span>'+
+    '<span class="spacer"></span><span class="mono">'+esc(f.r)+'</span></div>'+
+    '<div class="pbar" style="margin-top:4px"><i style="width:'+Math.round(f.v/max*100)+'%"></i></div></div>').join('');
+  d.appendChild(b);return d;
+}
 function vMios(){
+  if(!PC.from)aplicarPreset('hoy');
   const c=el('div',{class:'stack'});
-  const mios=S.viajes.filter(v=>v.conductorId===S.cfg.conductorId&&enRango(v));
-  c.appendChild(ph('Mis viajes',fFecha(P.from)+' al '+fFecha(P.to)));
-  const per=el('div',{class:'card'});
-  per.innerHTML='<div class="pad gf">'+fld('Desde','<input type="date" id="pD" value="'+P.from+'">')+fld('Hasta','<input type="date" id="pH" value="'+P.to+'">')+'</div>';
-  $('#pD',per).onchange=e=>{P.from=e.target.value;render()};
-  $('#pH',per).onchange=e=>{P.to=e.target.value;render()};
-  c.appendChild(per);
+  const yo=miConductor()||{};
+  const mios=S.viajes.filter(v=>v.conductorId===S.cfg.conductorId&&!v.borrado&&v.fecha>=PC.from&&v.fecha<=PC.to);
+  const pagados=mios.filter(v=>v.estado==='aprobado'||v.estado==='facturado');
+  const pend=mios.filter(v=>(v.estado||'pendiente')==='pendiente');
+
+  c.appendChild(ph('Mi trabajo',rotuloPeriodo()));
+
+  const chips=el('div',{class:'bar',style:'background:none;border:0;padding:0'});
+  [['hoy','Hoy'],['semana','Semana'],['mes','Mes'],['anio','Año'],['todo','Todo']].forEach(([k,l])=>{
+    const b=el('button',{type:'button'},l);
+    if(k===PC.k)b.setAttribute('aria-current','true');
+    b.onclick=()=>{aplicarPreset(k);render()};
+    chips.appendChild(b);
+  });
+  c.appendChild(chips);
+
   const t=el('div',{class:'tiles'});
-  let extra='';
-  if(S.cfg.verPagoConductor){
-    const d=miConductor()||{};
-    const pago=d.tipoPago==='Porcentaje'?sumTot(mios)*(+d.porcentaje||0)/100:sumCant(mios)*(+d.valorViaje||0);
-    extra=tile('Tu liquidación',money(pago),'del periodo',1);
+  let h=tile('Viajes',nf.format(sumCant(mios)),'en '+plu(mios.length,'registro'))+
+        tile('Metros cúbicos',n2(sumM3(mios)),'transportados');
+  if(S.cfg.verPagoConductor!==false){
+    h+=tile('Tu liquidación',money(pagoDe(yo,pagados)),
+      yo.tipoPago==='Porcentaje'?((+yo.porcentaje||0)+'% del flete'):(money(yo.valorViaje||0)+' por viaje'),1);
+    if(pend.length)h+=tile('En espera',money(pagoDe(yo,pend)),'de '+sumCant(pend)+' viaje(s) por validar');
+  }else{
+    h+=tile('Aprobados',nf.format(sumCant(pagados)),'de '+sumCant(mios)+' viajes');
   }
-  t.innerHTML=tile('Viajes',nf.format(sumCant(mios)),'')+tile('m³',n2(sumM3(mios)),'')+
-    tile('Aprobados',nf.format(sumCant(mios.filter(v=>v.estado==='aprobado'||v.estado==='facturado'))),'')+extra;
+  t.innerHTML=h;
   c.appendChild(t);
-  const l=el('div',{class:'stack'});
-  if(!mios.length)l.appendChild(el('div',{class:'empty'},'No hay viajes en estas fechas.'));
-  mios.sort((a,b)=>a.fecha<b.fecha?1:a.fecha>b.fecha?-1:(b.upd||0)-(a.upd||0)).forEach(v=>l.appendChild(itemViaje(v,true)));
-  c.appendChild(l);
+
+  if(S.cfg.verPagoConductor!==false&&mios.length){
+    const n=el('div',{class:'note'});
+    n.innerHTML='Se te liquidan los viajes <b>aprobados</b> por la oficina. Los que están por validar aparecen aparte hasta que los revisen.';
+    c.appendChild(n);
+  }
+
+  // actividad en el tiempo
+  if(mios.length){
+    const g={};
+    const porMes=(PC.k==='anio'||PC.k==='todo');
+    mios.forEach(v=>{
+      const k=porMes?v.fecha.slice(0,7):v.fecha;
+      (g[k]=g[k]||[]).push(v);
+    });
+    const filas=Object.keys(g).sort().reverse().slice(0,14).map(k=>{
+      const a=g[k];
+      let l;
+      if(porMes){const p=k.split('-');l=MESC[+p[1]-1]+' '+p[0]}
+      else{const d=desdeISO(k);l=DIAS[d.getDay()].slice(0,3)+' '+fFecha(k).slice(0,5)}
+      const pago=S.cfg.verPagoConductor!==false?'  ·  '+money(pagoDe(yo,a.filter(v=>v.estado==='aprobado'||v.estado==='facturado'))):'';
+      return {l,v:sumCant(a),r:nf.format(sumCant(a))+' viajes · '+n2(sumM3(a))+' m³'+pago};
+    });
+    const bl=barras(porMes?'Mes a mes':'Día a día',filas);
+    if(bl)c.appendChild(bl);
+
+    const go={};mios.forEach(v=>{(go[v.obraId]=go[v.obraId]||[]).push(v)});
+    const fo=Object.keys(go).map(k=>{const a=go[k];
+      return{l:nomObra(k),v:sumCant(a),r:nf.format(sumCant(a))+' viajes · '+n2(sumM3(a))+' m³'}})
+      .sort((a,b)=>b.v-a.v);
+    const bo=barras('Por obra',fo);
+    if(bo)c.appendChild(bo);
+  }
+
+  // listado agrupado por día
+  const lst=el('div',{class:'stack'});
+  if(!mios.length){
+    lst.appendChild(el('div',{class:'empty'},PC.k==='hoy'?'Todavía no has registrado viajes hoy.':'No tienes viajes registrados en este periodo.'));
+  }else{
+    const gd={};mios.forEach(v=>{(gd[v.fecha]=gd[v.fecha]||[]).push(v)});
+    Object.keys(gd).sort().reverse().forEach(f=>{
+      const a=gd[f].sort((x,y)=>(y.upd||0)-(x.upd||0));
+      const d=desdeISO(f);
+      const enc=el('div',{class:'row',style:'gap:8px;margin-top:4px'});
+      enc.innerHTML='<b style="font-family:var(--disp);font-size:14px">'+DIAS[d.getDay()][0].toUpperCase()+DIAS[d.getDay()].slice(1)+' '+fFecha(f)+'</b>'+
+        '<span class="spacer"></span><span class="mono" style="color:var(--muted)">'+nf.format(sumCant(a))+' viajes · '+n2(sumM3(a))+' m³</span>';
+      lst.appendChild(enc);
+      a.forEach(v=>lst.appendChild(itemViaje(v,true)));
+    });
+  }
+  c.appendChild(lst);
   return c;
 }
 function itemViaje(v,corto){
