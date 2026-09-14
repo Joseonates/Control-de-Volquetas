@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='9';
+const VERSION='10';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -581,9 +581,9 @@ function vTablero(){
 /* ===================== CONDUCTOR ===================== */
 function vRegistrar(){
   const c=el('div',{class:'stack'});
-  const mios=S.viajes.filter(v=>v.conductorId===S.cfg.conductorId&&v.fecha===hoy());
+  const mios=S.viajes.filter(v=>esMio(v)&&v.fecha===hoy());
   c.appendChild(ph('Registrar viaje','Hoy '+fFecha(hoy())));
-  const rech=S.viajes.filter(v=>v.conductorId===S.cfg.conductorId&&v.estado==='rechazado');
+  const rech=S.viajes.filter(v=>esMio(v)&&v.estado==='rechazado');
   if(rech.length){
     const n=el('div',{class:'note bad'});
     n.innerHTML='<b>'+rech.length+' viaje(s) rechazado(s).</b> Revísalos en Mis viajes y vuelve a registrarlos corregidos.';
@@ -610,7 +610,17 @@ const DIAS=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'
 const pad2=x=>String(x).padStart(2,'0');
 const fISO=d=>d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
 const desdeISO=s=>{const p=String(s).split('-');return new Date(+p[0],+p[1]-1,+p[2])};
-const PC={k:'hoy',from:'',to:''};
+const PC={k:'mes',from:'',to:''};
+/* Un viaje es mío si coincide el identificador o, en su defecto, el nombre que
+   quedó guardado en el propio viaje. Así el historial no se pierde si la oficina
+   recrea al conductor o si entro desde otro teléfono. */
+function esMio(v){
+  if(v.borrado)return false;
+  if(v.conductorId&&S.cfg.conductorId&&v.conductorId===S.cfg.conductorId)return true;
+  const yo=miConductor();
+  if(yo&&v.conductorNombre&&normUsr(v.conductorNombre)===normUsr(yo.nombre))return true;
+  return false;
+}
 function aplicarPreset(k){
   PC.k=k;const h=new Date();
   if(k==='hoy'){PC.from=PC.to=hoy();return}
@@ -646,10 +656,11 @@ function barras(titulo,filas){
   d.appendChild(b);return d;
 }
 function vMios(){
-  if(!PC.from)aplicarPreset('hoy');
+  if(!PC.from)aplicarPreset(PC.k||'mes');
   const c=el('div',{class:'stack'});
   const yo=miConductor()||{};
-  const mios=S.viajes.filter(v=>v.conductorId===S.cfg.conductorId&&!v.borrado&&v.fecha>=PC.from&&v.fecha<=PC.to);
+  const todos=S.viajes.filter(esMio);
+  const mios=todos.filter(v=>v.fecha>=PC.from&&v.fecha<=PC.to);
   const pagados=mios.filter(v=>v.estado==='aprobado'||v.estado==='facturado');
   const pend=mios.filter(v=>(v.estado||'pendiente')==='pendiente');
 
@@ -713,7 +724,16 @@ function vMios(){
   // listado agrupado por día
   const lst=el('div',{class:'stack'});
   if(!mios.length){
-    lst.appendChild(el('div',{class:'empty'},PC.k==='hoy'?'Todavía no has registrado viajes hoy.':'No tienes viajes registrados en este periodo.'));
+    const z=el('div',{class:'empty'});
+    if(todos.length){
+      z.innerHTML='No tienes viajes en este periodo, pero sí tienes <b>'+sumCant(todos)+'</b> en tu historial.';
+      const t=el('button',{class:'btn sec',type:'button',style:'margin-top:12px'},'Ver todo mi historial');
+      t.onclick=()=>{aplicarPreset('todo');render()};
+      z.appendChild(document.createElement('br'));z.appendChild(t);
+    }else{
+      z.textContent=PC.k==='hoy'?'Todavía no has registrado viajes hoy.':'Todavía no tienes viajes registrados.';
+    }
+    lst.appendChild(z);
   }else{
     const gd={};mios.forEach(v=>{(gd[v.fecha]=gd[v.fecha]||[]).push(v)});
     Object.keys(gd).sort().reverse().forEach(f=>{
