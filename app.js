@@ -43,7 +43,7 @@ async function dbDel(store,id){const d=await idb();return new Promise((res,rej)=
 
 /* ===================== estado ===================== */
 const CFG0={id:'config',empresaId:'',syncUrl:'',authKey:'',rol:'',conductorId:'',pin:'',
-  verPagoConductor:true,empresa:{nombre:'',nit:'',direccion:'',ciudad:'',telefono:''},
+  verPagoConductor:true,ultVolqueta:'',ultObra:'',ultConductor:'',empresa:{nombre:'',nit:'',direccion:'',ciudad:'',telefono:''},
   iva:19,retefuente:1,reteica:0,prefijo:'CC-',consecutivo:1,upd:0};
 const MAE0={id:'maestros',clientes:[],obras:[],volquetas:[],conductores:[],upd:0,dirty:false};
 const S={cfg:null,mae:null,viajes:[],costos:[],facturas:[]};
@@ -73,13 +73,17 @@ const enRango=(v,f,t)=>v.fecha>=(f||P.from)&&v.fecha<=(t||P.to);
 const ESTADOS={pendiente:['pen','Por validar'],aprobado:['apr','Aprobado'],rechazado:['rec','Rechazado'],facturado:['fac','Facturado']};
 const chipE=e=>{const x=ESTADOS[e||'pendiente'];return '<span class="chip '+x[0]+'">'+x[1]+'</span>'};
 
-async function guardarViaje(v){v.upd=now();v.dirty=true;await dbPut('viajes',v);
+/* Cada guardado sube un contador propio del registro. No se usa el reloj para decidir
+   qué versión gana: los relojes de los celulares no coinciden y una aprobación se
+   perdía cuando el teléfono del conductor iba adelantado. */
+const marcar=o=>{o.ver=(+o.ver||0)+1;o.upd=now();o.dirty=true;return o};
+async function guardarViaje(v){marcar(v);await dbPut('viajes',v);
   const i=S.viajes.findIndex(x=>x.id===v.id);if(i<0)S.viajes.push(v);else S.viajes[i]=v;sincronizar()}
-async function guardarCosto(c){c.upd=now();c.dirty=true;await dbPut('costos',c);
+async function guardarCosto(c){marcar(c);await dbPut('costos',c);
   const i=S.costos.findIndex(x=>x.id===c.id);if(i<0)S.costos.push(c);else S.costos[i]=c;sincronizar()}
-async function guardarFactura(f){f.upd=now();f.dirty=true;await dbPut('facturas',f);
+async function guardarFactura(f){marcar(f);await dbPut('facturas',f);
   const i=S.facturas.findIndex(x=>x.id===f.id);if(i<0)S.facturas.push(f);else S.facturas[i]=f;sincronizar()}
-async function guardarMae(){S.mae.upd=now();S.mae.dirty=true;await dbPut('kv',S.mae);sincronizar()}
+async function guardarMae(){marcar(S.mae);await dbPut('kv',S.mae);sincronizar()}
 async function guardarCfg(){S.cfg.upd=now();await dbPut('kv',S.cfg)}
 
 /* ===================== fotos ===================== */
@@ -143,10 +147,16 @@ async function traer(path){
   if(!r.ok)throw new Error('HTTP '+r.status);
   return await r.json();
 }
+/* ¿El registro del servidor trae algo nuevo frente al que tengo? */
+function distinto(a,b){
+  return (+a.ver||0)!==(+b.ver||0)||a.estado!==b.estado||a.motivo!==b.motivo||
+         !!a.borrado!==!!b.borrado||a.facturaId!==b.facturaId||(+a.upd||0)!==(+b.upd||0);
+}
 async function sincronizar(forzar){
   if(!conectado()){pintarSync();return}
   if(sincronizando){pendientePorSync=true;return}
   sincronizando=true;pintarSync();
+  let cambios=false;
   try{
     // 1. subir lo pendiente
     for(const v of S.viajes.filter(x=>x.dirty)){const c=Object.assign({},v);delete c.dirty;await enviar('viajes/'+v.id,c);v.dirty=false;await dbPut('viajes',v)}
@@ -156,8 +166,8 @@ async function sincronizar(forzar){
     if(S.mae.dirty&&esAdmin()){const o=Object.assign({},S.mae);delete o.dirty;await enviar('maestros',o);S.mae.dirty=false;await dbPut('kv',S.mae)}
     // 2. bajar novedades
     const rm=await traer('maestros');
-    if(rm&&(+rm.upd||0)>(+S.mae.upd||0)&&!S.mae.dirty){
-      S.mae=Object.assign({},MAE0,rm,{id:'maestros',dirty:false});await dbPut('kv',S.mae);
+    if(rm&&!S.mae.dirty&&((+rm.ver||0)!==(+S.mae.ver||0)||(+rm.upd||0)!==(+S.mae.upd||0))){
+      S.mae=Object.assign({},MAE0,rm,{id:'maestros',dirty:false});await dbPut('kv',S.mae);cambios=true;
     }
     for(const [path,arr,store] of [['viajes',S.viajes,'viajes'],['costos',S.costos,'costos'],['facturas',S.facturas,'facturas']]){
       const r=await traer(path);
@@ -165,18 +175,24 @@ async function sincronizar(forzar){
       for(const k in r){
         const rem=r[k];if(!rem||!rem.id)continue;
         const i=arr.findIndex(x=>x.id===rem.id);
-        if(i<0){const o=Object.assign({},rem,{dirty:false});arr.push(o);await dbPut(store,o)}
-        else if((+rem.upd||0)>(+arr[i].upd||0)&&!arr[i].dirty){const o=Object.assign({},rem,{dirty:false});arr[i]=o;await dbPut(store,o)}
+        if(i<0){const o=Object.assign({},rem,{dirty:false});arr.push(o);await dbPut(store,o);cambios=true}
+        // Si no hay nada pendiente de subir, lo del servidor manda: es lo que ya vieron
+        // todos. Así la aprobación del administrador llega siempre al conductor.
+        else if(!arr[i].dirty&&distinto(rem,arr[i])){
+          const o=Object.assign({},rem,{dirty:false});arr[i]=o;await dbPut(store,o);cambios=true;
+        }
       }
     }
     ultimoError='';
   }catch(e){ultimoError=String(e&&e.message||e)}
   sincronizando=false;pintarSync();
-  if(pendientePorSync){pendientePorSync=false;setTimeout(()=>sincronizar(),400);return}
-  if(forzar)render();
+  if(pendientePorSync){pendientePorSync=false;setTimeout(()=>sincronizar(forzar),400);return}
+  // Si algo cambió en el servidor, la pantalla se refresca sola (salvo con un diálogo abierto).
+  if((forzar||cambios)&&!$('#dlg').open&&S.cfg&&S.cfg.rol)render();
 }
-window.addEventListener('online',()=>sincronizar());
-setInterval(()=>{if(document.visibilityState==='visible')sincronizar(true)},45000);
+window.addEventListener('online',()=>sincronizar(true));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')sincronizar(true)});
+setInterval(()=>{if(document.visibilityState==='visible')sincronizar()},30000);
 
 /* ===================== instalación en el celular ===================== */
 let promptInstalar=null, instalaOculto=false;
@@ -600,14 +616,17 @@ function itemViaje(v,corto){
   else{const x=el('div',{class:'thumb',style:'display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px;text-align:center;cursor:default'},'sin<br>foto');th.appendChild(x)}
   d.appendChild(th);
   const m=el('div',{class:'m'});
+  const placa=v.volquetaId?nomVol(v.volquetaId):'sin placa';
+  const cond=v.conductorId?nomCon(v.conductorId):'sin conductor';
   m.innerHTML='<div class="t">'+esc(nomObra(v.obraId))+'</div>'+
-    '<div class="d">'+fFecha(v.fecha)+' · Vale '+esc(v.vale||'s/n')+' · '+esc(nomVol(v.volquetaId))+
-    (corto?'':' · '+esc(nomCon(v.conductorId)))+'</div>'+
+    '<div class="d">'+fFecha(v.fecha)+' · Vale '+esc(v.vale||'s/n')+'</div>'+
+    '<div class="d">'+(v.volquetaId?'':'<span style="color:var(--bad)">')+esc(placa)+(v.volquetaId?'':'</span>')+
+      ' · '+esc(cond)+'</div>'+
     '<div class="d">'+nf.format(k.cant)+' viaje(s) · '+n2(k.m3Tot)+' m³</div>'+
     '<div style="margin-top:6px">'+chipE(v.estado)+(v.dirty?' <span class="chip neu">Por enviar</span>':'')+'</div>'+
     (v.estado==='rechazado'&&v.motivo?'<div class="d" style="color:var(--bad);margin-top:4px">Motivo: '+esc(v.motivo)+'</div>':'');
   d.appendChild(m);
-  if(esAdmin()||!corto){const n=el('div',{class:'n'},money(k.total));d.appendChild(n)}
+  if(esAdmin()||S.cfg.verPagoConductor!==false){const n=el('div',{class:'n'},money(k.total));d.appendChild(n)}
   d.style.cursor='pointer';
   d.addEventListener('click',e=>{if(e.target.classList.contains('thumb'))return;
     if(esAdmin())formViaje(v);
@@ -624,16 +643,20 @@ function formViaje(v){
   const obras=S.mae.obras.filter(o=>o.activa!==false||o.id===v.obraId);
   const vols=S.mae.volquetas.filter(o=>o.activa!==false||o.id===v.volquetaId);
   const cons=S.mae.conductores.filter(o=>o.activo!==false||o.id===v.conductorId);
-  const conId=esAdmin()?(v.conductorId||''):S.cfg.conductorId;
+  const conId=esAdmin()?(v.conductorId||S.cfg.ultConductor||''):S.cfg.conductorId;
+  // La placa y la obra vienen preseleccionadas con las del viaje anterior: en la obra
+  // se repiten todo el día y así no se queda ningún registro sin placa.
+  const volSel=v.volquetaId||(nuevo?(S.cfg.ultVolqueta||(vols.length===1?vols[0].id:'')):'');
+  const obraSel=v.obraId||(nuevo?(S.cfg.ultObra||(obras.length===1?obras[0].id:'')):'');
   const b=el('div');
   b.innerHTML='<div class="gf">'+
     fld('Fecha','<input type="date" id="fFecha" value="'+esc(v.fecha||hoy())+'">')+
     fld('N.º de vale','<input id="fVale" inputmode="numeric" value="'+esc(v.vale||'')+'" placeholder="Ej. 10482">')+
     '</div>'+
-    '<div style="margin-top:10px">'+fld('Obra','<select id="fObra">'+(nuevo?'<option value="">Selecciona…</option>':'')+obras.map(o=>'<option value="'+o.id+'"'+(o.id===v.obraId?' selected':'')+'>'+esc(o.nombre)+'</option>').join('')+'</select>')+'</div>'+
+    '<div style="margin-top:10px">'+fld('Obra','<select id="fObra">'+(obraSel?'':'<option value="">Selecciona la obra…</option>')+obras.map(o=>'<option value="'+o.id+'"'+(o.id===obraSel?' selected':'')+'>'+esc(o.nombre)+'</option>').join('')+'</select>')+'</div>'+
     '<div class="gf" style="margin-top:10px">'+
-    fld('Volqueta','<select id="fVol"><option value="">—</option>'+vols.map(o=>'<option value="'+o.id+'"'+(o.id===v.volquetaId?' selected':'')+'>'+esc(o.placa)+'</option>').join('')+'</select>')+
-    (esAdmin()?fld('Conductor','<select id="fCon"><option value="">—</option>'+cons.map(o=>'<option value="'+o.id+'"'+(o.id===conId?' selected':'')+'>'+esc(o.nombre)+'</option>').join('')+'</select>'):'')+
+    fld('Volqueta (placa)','<select id="fVol">'+(volSel?'':'<option value="">Selecciona la placa…</option>')+vols.map(o=>'<option value="'+o.id+'"'+(o.id===volSel?' selected':'')+'>'+esc(o.placa)+'</option>').join('')+'</select>')+
+    (esAdmin()?fld('Conductor','<select id="fCon">'+(conId?'':'<option value="">Selecciona…</option>')+cons.map(o=>'<option value="'+o.id+'"'+(o.id===conId?' selected':'')+'>'+esc(o.nombre)+'</option>').join('')+'</select>'):'')+
     fld('Cantidad de viajes','<input type="number" id="fCant" inputmode="numeric" min="1" step="1" value="'+(v.cant||1)+'">')+
     fld('m³ por viaje','<input type="number" id="fM3" inputmode="decimal" min="0" step="0.5" value="'+(v.m3!=null?v.m3:'')+'" placeholder="Ej. 7">')+
     '</div>'+
@@ -677,7 +700,9 @@ function formViaje(v){
   const ok=$('#fOk',b);
   if(ok)ok.onclick=async()=>{
     if(!g('fObra').value){toast('Selecciona la obra');return}
+    if(!g('fVol').value){toast('Selecciona la placa de la volqueta');g('fVol').focus();return}
     const cid=esAdmin()?(g('fCon')?g('fCon').value:conId):S.cfg.conductorId;
+    if(!cid){toast('Selecciona el conductor');return}
     const nv=Object.assign({},v,{
       id:v.id||uid('t'),fecha:g('fFecha').value||hoy(),vale:g('fVale').value.trim(),
       obraId:g('fObra').value,volquetaId:g('fVol').value,conductorId:cid,
@@ -687,7 +712,11 @@ function formViaje(v){
       estado:esAdmin()?(v.estado||'aprobado'):'pendiente',
       motivo:esAdmin()?(v.motivo||''):'' ,borrado:false
     });
-    await guardarViaje(nv);cerrar();render();
+    await guardarViaje(nv);
+    S.cfg.ultVolqueta=nv.volquetaId;S.cfg.ultObra=nv.obraId;
+    if(esAdmin())S.cfg.ultConductor=cid;
+    await guardarCfg();
+    cerrar();render();
     toast(nuevo?(esAdmin()?'Viaje registrado':'Enviado. La oficina lo validará.'):'Viaje actualizado');
   };
   abrir(nuevo?'Registrar viaje':'Viaje',b);
@@ -857,7 +886,7 @@ function formCosto(x){
 }
 
 /* ===================== ADMIN: cobro ===================== */
-let cobroCli='';
+let cobroCli='', verBorradas=false;
 function vCobro(){
   const c=el('div',{class:'stack'});
   c.appendChild(ph('Cuenta de cobro',fFecha(P.from)+' al '+fFecha(P.to)));
@@ -900,18 +929,30 @@ function vCobro(){
     };
   }
 
-  const hist=S.facturas.filter(f=>!f.borrado).sort((a,b)=>a.fecha<b.fecha?1:-1);
+  const borrados=S.facturas.filter(f=>f.borrado).sort((a,b)=>a.fecha<b.fecha?1:-1);
+  const hist=(verBorradas?borrados:S.facturas.filter(f=>!f.borrado)).sort((a,b)=>a.fecha<b.fecha?1:-1);
   const hc=el('div',{class:'card'});
-  hc.innerHTML='<h3>Documentos emitidos</h3>';
+  const hh=el('h3');
+  hh.innerHTML=(verBorradas?'Documentos eliminados':'Documentos emitidos')+'<span class="spacer" style="margin-left:auto"></span>';
+  if(borrados.length||verBorradas){
+    const tg=el('button',{class:'btn sm sec',type:'button'},verBorradas?'Ver emitidos':'Ver eliminados ('+borrados.length+')');
+    tg.onclick=()=>{verBorradas=!verBorradas;render()};
+    hh.appendChild(tg);
+  }
+  hc.appendChild(hh);
   const hl=el('div',{class:'stack',style:'padding:12px'});
-  if(!hist.length)hl.appendChild(el('div',{class:'empty'},'Todavía no has emitido documentos.'));
+  if(!hist.length)hl.appendChild(el('div',{class:'empty'},verBorradas?'No hay documentos eliminados.':'Todavía no has emitido documentos.'));
   hist.forEach(f=>{
     const d=el('div',{class:'item'});
+    const chip=f.borrado?'<span class="chip rec">Eliminado'+(f.borradoEn?' el '+fFecha(f.borradoEn):'')+'</span>':
+      f.estado==='pagada'?'<span class="chip apr">Pagada</span>':
+      f.estado==='anulada'?'<span class="chip rec">Anulada</span>':'<span class="chip fac">Emitida</span>';
     d.innerHTML='<div class="m"><div class="t">'+esc(f.numero)+'</div>'+
       '<div class="d">'+esc(nomCli(f.clienteId))+' · '+fFecha(f.desde)+' al '+fFecha(f.hasta)+'</div>'+
-      '<div style="margin-top:5px">'+(f.estado==='pagada'?'<span class="chip apr">Pagada</span>':f.estado==='anulada'?'<span class="chip rec">Anulada</span>':'<span class="chip fac">Emitida</span>')+'</div></div>'+
+      '<div style="margin-top:5px">'+chip+'</div></div>'+
       '<div class="n">'+money(f.pagar)+'</div>';
-    d.style.cursor='pointer';d.onclick=()=>verFactura(f.id);
+    if(f.borrado){d.style.opacity='.62'}
+    else{d.style.cursor='pointer';d.onclick=()=>verFactura(f.id)}
     hl.appendChild(d);
   });
   hc.appendChild(hl);c.appendChild(hc);
@@ -928,7 +969,8 @@ function verFactura(id){
   b.innerHTML='<div id="fv"></div><div class="row" style="margin-top:14px">'+
     '<button class="btn acc" id="vP" style="flex:1">Imprimir / PDF</button>'+
     (f.estado==='emitida'?'<button class="btn sec" id="vPag">Marcar pagada</button>':'')+
-    (f.estado!=='anulada'?'<button class="btn bad" id="vAn">Anular</button>':'')+'</div>';
+    (f.estado!=='anulada'?'<button class="btn sec" id="vAn">Anular</button>':'')+
+    '<span class="spacer"></span><button class="btn bad" id="vDel">Eliminar</button></div>';
   $('#fv',b).innerHTML=docFactura(f);
   $('#vP',b).onclick=()=>{$('#print').innerHTML=docFactura(f);window.print()};
   const p=$('#vPag',b);if(p)p.onclick=async()=>{f.estado='pagada';await guardarFactura(f);cerrar();render();toast('Marcada como pagada')};
@@ -936,7 +978,38 @@ function verFactura(id){
     f.estado='anulada';await guardarFactura(f);
     for(const vid of (f.viajeIds||[])){const v=byId(S.viajes,vid);if(v){v.estado='aprobado';v.facturaId=null;await guardarViaje(v)}}
     cerrar();render();toast('Anulado. Los viajes vuelven a estar disponibles.')};
+  $('#vDel',b).onclick=()=>eliminarFactura(f);
   abrir('Documento '+f.numero,b);
+}
+function eliminarFactura(f){
+  const n=(f.viajeIds||[]).length;
+  const b=el('div');
+  b.innerHTML='<div class="note bad"><b>Vas a eliminar el documento '+esc(f.numero)+'.</b><br>'+
+      (n===1?'El viaje que incluye vuelve a quedar disponible para cobrarlo en otro documento. '
+            :'Los '+n+' viajes que incluye vuelven a quedar disponibles para cobrarlos en otro documento. ')+
+      'El número '+esc(f.numero)+' no se reutiliza.</div>'+
+    '<div style="margin-top:12px">'+
+    fld('Escribe la clave de administrador','<input id="dPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••" style="font-size:24px;text-align:center;letter-spacing:.4em">')+
+    '</div>'+
+    '<div class="row" style="margin-top:14px"><button class="btn bad" id="dOk" style="flex:1">Eliminar documento</button>'+
+    '<button class="btn sec" id="dC">Cancelar</button></div>'+
+    '<p style="color:var(--muted);font-size:12px;margin:12px 0 0">Queda registrado quién y cuándo lo eliminó. '+
+    'Puedes verlo después con “Ver eliminados”.</p>';
+  $('#dC',b).onclick=cerrar;
+  $('#dOk',b).onclick=async()=>{
+    const pin=$('#dPin',b).value.trim();
+    if(!S.cfg.pin){toast('Primero crea una clave de administrador');return}
+    if(pin!==S.cfg.pin){toast('Clave incorrecta');$('#dPin',b).value='';return}
+    for(const vid of (f.viajeIds||[])){
+      const v=byId(S.viajes,vid);
+      if(v&&v.estado==='facturado'){v.estado='aprobado';v.facturaId=null;await guardarViaje(v)}
+    }
+    f.borrado=true;f.borradoEn=hoy();f.estado='eliminada';
+    await guardarFactura(f);
+    cerrar();render();toast('Documento '+f.numero+' eliminado');
+  };
+  abrir('Eliminar documento',b);
+  setTimeout(()=>{const i=$('#dPin',b);if(i)i.focus()},60);
 }
 function docFactura(f){
   const e=S.cfg.empresa||{},cli=byId(S.mae.clientes,f.clienteId)||{};
