@@ -3,6 +3,11 @@
 (function(){
 "use strict";
 
+/* Número de versión visible en la app. Sirve para comprobar de un vistazo
+   si el celular ya tomó la versión nueva. */
+const VERSION='7';
+const FECHA_VERSION='14/09/2026';
+
 /* ===================== utilidades ===================== */
 const $=(s,r)=>(r||document).querySelector(s);
 const $$=(s,r)=>[...(r||document).querySelectorAll(s)];
@@ -288,7 +293,8 @@ function pintarGate(paso){
       '<p style="color:var(--muted);margin:6px 0 22px">Control de viajes, vales y facturación.</p>'+
       '<div class="stack">'+
       '<button class="btn big acc" id="gCon">Soy conductor</button>'+
-      '<button class="btn big sec" id="gAdm">Soy administrador</button></div>';
+      '<button class="btn big sec" id="gAdm">Soy administrador</button></div>'+
+      '<p style="color:var(--muted);font-size:12px;text-align:center;margin-top:22px">Versión '+VERSION+' · '+FECHA_VERSION+'</p>';
     $('#gCon').onclick=()=>pintarGate('con1');
     $('#gAdm').onclick=()=>pintarGate('adm');
     return;
@@ -678,12 +684,18 @@ function vMios(){
     });
   }
   c.appendChild(lst);
-  const out=el('button',{class:'btn sec',type:'button',style:'margin-top:6px'},'Cerrar sesión');
+  const pie=el('div',{class:'row',style:'margin-top:6px'});
+  const out=el('button',{class:'btn sec',type:'button'},'Cerrar sesión');
   out.onclick=async()=>{
     S.cfg.rol='';S.cfg.auth=false;S.cfg.conductorId='';await guardarCfg();
     pintarGate(conectado()?'con2':'rol');
   };
-  c.appendChild(out);
+  const upd=el('button',{class:'btn sec sm',type:'button'},'Buscar actualización');
+  upd.onclick=buscarActualizacion;
+  pie.appendChild(out);pie.appendChild(upd);
+  pie.appendChild(el('div',{class:'spacer'}));
+  pie.appendChild(el('span',{style:'font-size:12px;color:var(--muted)'},'Versión '+VERSION));
+  c.appendChild(pie);
   return c;
 }
 function itemViaje(v,corto){
@@ -1158,6 +1170,10 @@ function panelConexion(){
     '<div class="row" style="margin-top:8px"><button class="btn sm acc" id="xCopy">Copiar código</button>'+
     '<span style="font-size:12.5px;color:var(--muted)">Envíaselo por WhatsApp. Ellos lo pegan al abrir la app.</span></div></div>'+
     (yaInstalada()?'':'<div><button class="btn sec" id="xInst" type="button">Instalar la app en este dispositivo</button></div>')+
+    '<hr style="border:0;border-top:1px solid var(--line);margin:4px 0">'+
+    '<div class="row"><div><div style="font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)">Versión instalada</div>'+
+    '<b style="font-family:var(--disp);font-size:17px">'+VERSION+'</b> <span style="color:var(--muted);font-size:12px">· '+FECHA_VERSION+'</span></div>'+
+    '<span class="spacer"></span><button class="btn sm sec" id="xUpd" type="button">Buscar actualización</button></div>'+
     '<label class="f" style="flex-direction:row;align-items:center;gap:9px"><input type="checkbox" id="xVer" style="width:auto"'+(S.cfg.verPagoConductor?' checked':'')+'> <span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink)">Mostrar a cada conductor su liquidación</span></label>'+
     '</div>';
   const est=$('#xEst',d);
@@ -1182,6 +1198,7 @@ function panelConexion(){
     catch(e){$('#xCod',d).select();toast('Selecciona y copia el código')}
   };
   const bi=$('#xInst',d);if(bi)bi.onclick=lanzarInstalacion;
+  $('#xUpd',d).onclick=buscarActualizacion;
   $('#xVer',d).onchange=async e=>{S.cfg.verPagoConductor=e.target.checked;await guardarCfg();toast('Guardado')};
   return d;
 }
@@ -1327,6 +1344,41 @@ function formMaestro(ent,it){
   abrir((it.id?'Editar ':'Nuevo ')+s.sing,b);
 }
 
+/* ===================== actualizaciones de la app ===================== */
+let regSW=null, recargando=false;
+async function vigilarActualizaciones(){
+  if(!('serviceWorker' in navigator))return;
+  try{
+    regSW=await navigator.serviceWorker.register('sw.js');
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{
+      if(recargando)return;recargando=true;location.reload();
+    });
+    regSW.addEventListener('updatefound',()=>{
+      const w=regSW.installing;if(!w)return;
+      w.addEventListener('statechange',()=>{
+        if(w.state==='installed'&&navigator.serviceWorker.controller){
+          toast('Hay una versión nueva, actualizando…');
+          w.postMessage({t:'actualizar'});
+        }
+      });
+    });
+    // Al volver a abrir la app se revisa si la oficina publicó una versión nueva.
+    document.addEventListener('visibilitychange',()=>{
+      if(document.visibilityState==='visible'&&regSW)regSW.update().catch(()=>{});
+    });
+    setTimeout(()=>{if(regSW)regSW.update().catch(()=>{})},3000);
+  }catch(e){}
+}
+async function buscarActualizacion(){
+  toast('Buscando versión nueva…');
+  try{
+    if(regSW){await regSW.update();
+      if(regSW.waiting){regSW.waiting.postMessage({t:'actualizar'});return}}
+    const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)));
+  }catch(e){}
+  setTimeout(()=>location.reload(),600);
+}
+
 /* ===================== arranque ===================== */
 async function boot(){
   mesActual();
@@ -1343,9 +1395,7 @@ async function boot(){
   $('#instalaOk').onclick=lanzarInstalacion;
   $('#instalaNo').onclick=()=>{instalaOculto=true;pintarInstalar()};
   pintarInstalar();
-  if('serviceWorker' in navigator){
-    try{await navigator.serviceWorker.register('sw.js')}catch(e){}
-  }
+  vigilarActualizaciones();
 }
 boot();
 })();

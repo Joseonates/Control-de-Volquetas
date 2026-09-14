@@ -1,5 +1,7 @@
-/* Service worker: deja que la app abra sin señal. */
-const VER = 'volquetas-v1';
+/* Service worker: deja que la app abra sin señal y garantiza que las
+   actualizaciones lleguen. El número al final del nombre cambia en cada
+   versión, así el celular descarta la caché vieja. */
+const VER = 'volquetas-v7';
 const CORE = [
   './',
   './index.html',
@@ -12,7 +14,10 @@ const CORE = [
 
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(VER).then(c => c.addAll(CORE)).then(() => self.skipWaiting())
+    caches.open(VER)
+      // cache:'reload' obliga a bajarlos del servidor, ignorando la caché del navegador
+      .then(c => Promise.all(CORE.map(u => c.add(new Request(u, {cache: 'reload'})).catch(() => null))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -24,20 +29,27 @@ self.addEventListener('activate', e => {
   );
 });
 
+self.addEventListener('message', e => {
+  if (e.data && e.data.t === 'actualizar') self.skipWaiting();
+});
+
 self.addEventListener('fetch', e => {
   const req = e.request;
-  if (req.method !== 'GET') return;                       // las escrituras van directo a la red
+  if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;        // la base de datos y las fuentes no se cachean aquí
+  if (url.origin !== self.location.origin) return;
 
-  // La app se sirve primero de la red para que las actualizaciones lleguen solas,
-  // y cae al caché cuando no hay señal.
+  // La app y sus archivos se piden siempre al servidor, saltándose la caché del
+  // navegador; el caché propio queda solo como respaldo para cuando no hay señal.
+  const esApp = req.mode === 'navigate' || /\.(html|js|webmanifest)$/.test(url.pathname) || url.pathname.endsWith('/');
+  const pedir = esApp ? fetch(new Request(req.url, {cache: 'no-store', credentials: 'same-origin'})) : fetch(req);
+
   e.respondWith(
-    fetch(req)
+    pedir
       .then(r => {
         if (r && r.ok) {
-          const copy = r.clone();
-          caches.open(VER).then(c => c.put(req, copy));
+          const copia = r.clone();
+          caches.open(VER).then(c => c.put(req, copia));
         }
         return r;
       })
