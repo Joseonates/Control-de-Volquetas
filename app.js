@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='10';
+const VERSION='11';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -618,7 +618,10 @@ function esMio(v){
   if(v.borrado)return false;
   if(v.conductorId&&S.cfg.conductorId&&v.conductorId===S.cfg.conductorId)return true;
   const yo=miConductor();
-  if(yo&&v.conductorNombre&&normUsr(v.conductorNombre)===normUsr(yo.nombre))return true;
+  if(!yo)return false;
+  if(v.conductorUsuario&&yo.usuario&&normUsr(v.conductorUsuario)===normUsr(yo.usuario))return true;
+  // sin usuario guardado (registros viejos), se compara el nombre
+  if(!v.conductorUsuario&&v.conductorNombre&&normUsr(v.conductorNombre)===normUsr(yo.nombre))return true;
   return false;
 }
 function aplicarPreset(k){
@@ -664,7 +667,7 @@ function vMios(){
   const pagados=mios.filter(v=>v.estado==='aprobado'||v.estado==='facturado');
   const pend=mios.filter(v=>(v.estado||'pendiente')==='pendiente');
 
-  c.appendChild(ph('Mi trabajo',rotuloPeriodo()));
+  c.appendChild(ph('Mi trabajo',(yo.nombre?yo.nombre+' · ':'')+rotuloPeriodo()));
 
   const chips=el('div',{class:'bar',style:'background:none;border:0;padding:0'});
   [['hoy','Hoy'],['semana','Semana'],['mes','Mes'],['anio','Año'],['todo','Todo']].forEach(([k,l])=>{
@@ -750,7 +753,10 @@ function vMios(){
   const pie=el('div',{class:'row',style:'margin-top:6px'});
   const out=el('button',{class:'btn sec',type:'button'},'Cerrar sesión');
   out.onclick=async()=>{
-    S.cfg.rol='';S.cfg.auth=false;S.cfg.conductorId='';await guardarCfg();
+    // se borra también lo que el teléfono recordaba del turno anterior
+    S.cfg.rol='';S.cfg.auth=false;S.cfg.conductorId='';
+    S.cfg.ultVolqueta='';S.cfg.ultObra='';S.cfg.ultConductor='';
+    await guardarCfg();PC.k='mes';PC.from='';
     pintarGate(conectado()?'con2':'rol');
   };
   const upd=el('button',{class:'btn sec sm',type:'button'},'Buscar actualización');
@@ -801,8 +807,11 @@ function formViaje(v){
   // se repiten todo el día y así no se queda ningún registro sin placa.
   const volSel=v.volquetaId||(nuevo?(S.cfg.ultVolqueta||(vols.length===1?vols[0].id:'')):'');
   const obraSel=v.obraId||(nuevo?(S.cfg.ultObra||(obras.length===1?obras[0].id:'')):'');
+  const yo=esAdmin()?null:miConductor();
   const b=el('div');
-  b.innerHTML='<div class="gf">'+
+  b.innerHTML=(yo?'<div class="note" style="margin-bottom:12px">Registras como <b>'+esc(yo.nombre)+'</b>'+
+      (yo.usuario?' <span class="mono">('+esc(yo.usuario)+')</span>':'')+'</div>':'')+
+    '<div class="gf">'+
     fld('Fecha','<input type="date" id="fFecha" value="'+esc(v.fecha||hoy())+'">')+
     fld('N.º de vale','<input id="fVale" inputmode="numeric" value="'+esc(v.vale||'')+'" placeholder="Ej. 10482">')+
     '</div>'+
@@ -859,6 +868,7 @@ function formViaje(v){
     const ob=byId(S.mae.obras,g('fObra').value)||{};
     const vo=byId(S.mae.volquetas,g('fVol').value)||{};
     const co=byId(S.mae.conductores,cid)||{};
+    if(!esAdmin()&&!co.id){toast('No se reconoce tu usuario. Cierra sesión y vuelve a entrar.');return}
     const cl=byId(S.mae.clientes,ob.clienteId)||{};
     const nv=Object.assign({},v,{
       id:v.id||uid('t'),fecha:g('fFecha').value||hoy(),vale:g('fVale').value.trim(),
@@ -867,6 +877,7 @@ function formViaje(v){
       obraNombre:ob.nombre||v.obraNombre||'',destino:ob.destino||v.destino||'',
       clienteId:ob.clienteId||v.clienteId||'',clienteNombre:cl.nombre||v.clienteNombre||'',
       placa:vo.placa||v.placa||'',conductorNombre:co.nombre||v.conductorNombre||'',
+      conductorUsuario:co.usuario||v.conductorUsuario||'',
       valorViaje:+(ob.valorViaje||0),valorM3:+(ob.valorM3||0),
       cant:Math.max(1,+g('fCant').value||1),m3:+g('fM3').value||0,
       obs:g('fObs').value.trim(),fotoId:fotoId,
