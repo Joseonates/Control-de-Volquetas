@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='12';
+const VERSION='13';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -214,6 +214,11 @@ async function sincronizar(forzar){
     for(const f of (await dbAll('fotos')).filter(x=>x.dirty)){const o={b64:f.b64,upd:f.upd};await enviar('fotos/'+f.id,o);subio=true;f.dirty=false;await dbPut('fotos',f)}
     if(S.mae.dirty&&esAdmin()){const o=Object.assign({},S.mae);delete o.dirty;await enviar('maestros',o);subio=true;S.mae.dirty=false;await dbPut('kv',S.mae)}
     // 2. bajar novedades
+    // Solo el administrador manda maestros. Si un teléfono de conductor quedó con
+    // la marca de "pendiente por subir" (por ejemplo, porque alguna vez se usó en
+    // modo administrador), se le quita: si no, nunca volvería a recibir los
+    // conductores nuevos que crea la oficina.
+    if(!esAdmin()&&S.mae.dirty){S.mae.dirty=false;await dbPut('kv',S.mae)}
     const rm=await traer('maestros');
     if(rm&&!S.mae.dirty&&((+rm.ver||0)!==(+S.mae.ver||0)||(+rm.upd||0)!==(+S.mae.upd||0))){
       S.mae=Object.assign({},MAE0,rm,{id:'maestros',dirty:false});await dbPut('kv',S.mae);cambios=true;
@@ -371,12 +376,18 @@ function pintarGate(paso){
         '<button class="btn sec" id="cBack">Atrás</button></div>'+
         '<p style="color:var(--muted);font-size:12.5px;margin-top:16px">¿No tienes usuario o se te olvidó la clave? '+
         'Pídeselos a la oficina: los crea desde Ajustes → Conductores.</p>'+
-        '<p style="text-align:center;margin-top:10px"><button class="btn sm sec" id="lOtra">Conectar con otro código</button></p>';
+        '<p style="text-align:center;margin-top:10px"><button class="btn sm sec" id="lAct">Actualizar datos</button> '+
+        '<button class="btn sm sec" id="lOtra">Conectar con otro código</button></p>';
       const entrar=async()=>{
         const u=normUsr($('#lUsr').value), k=$('#lCla').value;
         if(!u||!k){toast('Escribe usuario y clave');return}
-        const cd=(S.mae.conductores||[]).find(x=>normUsr(x.usuario)===u&&x.clave);
-        if(!cd){toast('Usuario o clave incorrectos');return}
+        let cd=(S.mae.conductores||[]).find(x=>normUsr(x.usuario)===u&&x.clave);
+        if(!cd&&conectado()){
+          // puede ser un conductor creado hace poco que este teléfono todavía no conoce
+          toast('Buscando tu usuario…');await sincronizar();
+          cd=(S.mae.conductores||[]).find(x=>normUsr(x.usuario)===u&&x.clave);
+        }
+        if(!cd){toast('No encuentro ese usuario. Toca “Actualizar datos” y vuelve a intentar.');return}
         if(cd.activo===false){toast('Ese usuario está inactivo. Habla con la oficina.');return}
         const h=await huella(cd.claveSal||'',k);
         if(h!==cd.clave){toast('Usuario o clave incorrectos');$('#lCla').value='';return}
@@ -386,6 +397,12 @@ function pintarGate(paso){
       $('#lCla').addEventListener('keydown',e=>{if(e.key==='Enter')entrar()});
       $('#cBack').onclick=()=>pintarGate('rol');
       $('#lOtra').onclick=()=>pintarGate('con1');
+      $('#lAct').onclick=async()=>{
+        toast('Trayendo los datos de la oficina…');
+        await sincronizar();
+        toast(ultimoError?'Sin conexión. Revisa tu internet.':'Datos al día: '+(S.mae.conductores||[]).length+' conductor(es)');
+        pintarGate('con2');
+      };
       return;
     }
     // Todavía sin credenciales: se elige el nombre, como antes.
@@ -393,12 +410,19 @@ function pintarGate(paso){
     c.innerHTML='<h2>¿Quién eres?</h2>'+
       '<p style="color:var(--muted);margin:6px 0 16px">Toca tu nombre. Quedará guardado en este teléfono.</p>'+
       (cs.length?'<div class="stack" id="cList"></div>':'<div class="note">La oficina todavía no ha registrado conductores. Avísales y vuelve a entrar.</div>')+
-      '<button class="btn sec" id="cBack" style="margin-top:16px;width:100%">Atrás</button>';
+      '<div class="row" style="margin-top:16px"><button class="btn sec" id="cAct" style="flex:1">Actualizar lista</button>'+
+      '<button class="btn sec" id="cBack" style="flex:1">Atrás</button></div>';
     const L=$('#cList');
     cs.forEach(x=>{const b=el('button',{class:'btn big sec',type:'button'},esc(x.nombre));
       b.onclick=async()=>{S.cfg.conductorId=x.id;S.cfg.rol='conductor';S.cfg.auth=false;await guardarCfg();iniciar()};
       if(L)L.appendChild(b)});
-    $('#cBack').onclick=()=>pintarGate('con1');
+    $('#cAct').onclick=async()=>{
+      toast('Trayendo los datos de la oficina…');
+      await sincronizar();
+      toast(ultimoError?'Sin conexión. Revisa tu internet.':'Datos al día');
+      pintarGate('con2');
+    };
+    $('#cBack').onclick=()=>pintarGate('rol');
     return;
   }
   if(paso==='adm'){
