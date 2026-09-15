@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='14';
+const VERSION='15';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -484,6 +484,212 @@ function render(){
 function ph(t,s,extra){const h=el('div',{class:'ph'});h.innerHTML='<div><h2>'+esc(t)+'</h2><p>'+esc(s||'')+'</p></div>';
   if(extra){h.appendChild(el('div',{class:'spacer'}));h.appendChild(extra)}return h}
 
+
+/* ===================== exportar a Excel =====================
+   Se arma el .xlsx a mano (un .xlsx es un zip de archivos XML). Sin librerías
+   externas, para que la app siga funcionando sin señal. */
+let _crcT=null;
+function crcTabla(){
+  if(_crcT)return _crcT;
+  _crcT=new Uint32Array(256);
+  for(let i=0;i<256;i++){let c=i;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);_crcT[i]=c>>>0}
+  return _crcT;
+}
+function crc32(b){const t=crcTabla();let c=0xFFFFFFFF;for(let i=0;i<b.length;i++)c=t[(c^b[i])&0xFF]^(c>>>8);return (c^0xFFFFFFFF)>>>0}
+const utf8=s=>new TextEncoder().encode(s);
+function zipear(archivos){
+  const partes=[],central=[];let off=0;
+  const u16=v=>[v&255,(v>>8)&255], u32=v=>[v&255,(v>>8)&255,(v>>16)&255,(v>>24)&255];
+  for(const a of archivos){
+    const nom=utf8(a.nombre), dat=a.datos, c=crc32(dat);
+    const loc=[].concat([0x50,0x4b,3,4],u16(20),u16(0),u16(0),u16(0),u16(0),u32(c),u32(dat.length),u32(dat.length),u16(nom.length),u16(0));
+    partes.push(new Uint8Array(loc),nom,dat);
+    central.push({nom,c,len:dat.length,off});
+    off+=loc.length+nom.length+dat.length;
+  }
+  const cd=[];let cdLen=0;
+  for(const e of central){
+    const h=[].concat([0x50,0x4b,1,2],u16(20),u16(20),u16(0),u16(0),u16(0),u16(0),u32(e.c),u32(e.len),u32(e.len),
+      u16(e.nom.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(e.off));
+    cd.push(new Uint8Array(h),e.nom);cdLen+=h.length+e.nom.length;
+  }
+  const fin=new Uint8Array([].concat([0x50,0x4b,5,6],u16(0),u16(0),u16(central.length),u16(central.length),u32(cdLen),u32(off),u16(0)));
+  const todo=partes.concat(cd,[fin]);
+  let total=0;todo.forEach(p=>total+=p.length);
+  const out=new Uint8Array(total);let p=0;
+  todo.forEach(x=>{out.set(x,p);p+=x.length});
+  return out;
+}
+const xe=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+const colLetra=n=>{let s='';n++;while(n>0){const r=(n-1)%26;s=String.fromCharCode(65+r)+s;n=(n-1-r)/26}return s};
+const serieFecha=f=>{const p=String(f).split('-');if(p.length<3)return null;
+  return (Date.UTC(+p[0],+p[1]-1,+p[2])-Date.UTC(1899,11,30))/86400000};
+
+/* celda: {v:valor, t:'s'|'n'|'f'|'e', b:true para negrita} */
+function hoja(filas,anchos){
+  let x='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+  if(anchos&&anchos.length){x+='<cols>';anchos.forEach((a,i)=>{x+='<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+a+'" customWidth="1"/>'});x+='</cols>'}
+  x+='<sheetData>';
+  filas.forEach((fila,r)=>{
+    x+='<row r="'+(r+1)+'">';
+    fila.forEach((c,i)=>{
+      if(c==null||c.v===''||c.v==null)return;
+      const ref=colLetra(i)+(r+1);
+      let s=0;
+      if(c.t==='e')s=1;                       // encabezado
+      else if(c.t==='f')s=3;                  // fecha
+      else if(c.t==='$')s=c.b?7:2;            // dinero
+      else if(c.t==='n')s=c.b?6:4;            // número con decimal
+      else if(c.t==='i')s=c.b?6:5;            // entero
+      else if(c.b)s=6;
+      if(c.t==='f'){const n=serieFecha(c.v);if(n==null)return;x+='<c r="'+ref+'" s="'+s+'"><v>'+n+'</v></c>';return}
+      if(c.t==='$'||c.t==='n'||c.t==='i'){x+='<c r="'+ref+'" s="'+s+'"><v>'+(+c.v||0)+'</v></c>';return}
+      x+='<c r="'+ref+'" s="'+s+'" t="inlineStr"><is><t xml:space="preserve">'+xe(c.v)+'</t></is></c>';
+    });
+    x+='</row>';
+  });
+  return x+'</sheetData></worksheet>';
+}
+function libro(hojas){
+  const N='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const R='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const estilos='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<styleSheet xmlns="'+N+'">'+
+    '<numFmts count="4">'+
+      '<numFmt numFmtId="164" formatCode="&quot;$&quot;\\ #,##0"/>'+
+      '<numFmt numFmtId="165" formatCode="DD/MM/YYYY"/>'+
+      '<numFmt numFmtId="166" formatCode="#,##0.0"/>'+
+      '<numFmt numFmtId="167" formatCode="#,##0"/>'+
+    '</numFmts>'+
+    '<fonts count="3">'+
+      '<font><sz val="10"/><name val="Arial"/></font>'+
+      '<font><b/><sz val="9"/><color rgb="FFFFFFFF"/><name val="Arial"/></font>'+
+      '<font><b/><sz val="10"/><name val="Arial"/></font>'+
+    '</fonts>'+
+    '<fills count="3"><fill><patternFill patternType="none"/></fill>'+
+      '<fill><patternFill patternType="gray125"/></fill>'+
+      '<fill><patternFill patternType="solid"><fgColor rgb="FF22312B"/><bgColor indexed="64"/></patternFill></fill></fills>'+
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'+
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'+
+    '<cellXfs count="8">'+
+      '<xf xfId="0" numFmtId="0" fontId="0" fillId="0" borderId="0"/>'+
+      '<xf xfId="0" numFmtId="0" fontId="1" fillId="2" borderId="0" applyFont="1" applyFill="1"><alignment vertical="center" wrapText="1"/></xf>'+
+      '<xf xfId="0" numFmtId="164" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/>'+
+      '<xf xfId="0" numFmtId="165" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/>'+
+      '<xf xfId="0" numFmtId="166" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/>'+
+      '<xf xfId="0" numFmtId="167" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/>'+
+      '<xf xfId="0" numFmtId="167" fontId="2" fillId="0" borderId="0" applyNumberFormat="1" applyFont="1"/>'+
+      '<xf xfId="0" numFmtId="164" fontId="2" fillId="0" borderId="0" applyNumberFormat="1" applyFont="1"/>'+
+    '</cellXfs>'+
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'+
+    '</styleSheet>';
+  let ct='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'+
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+
+    '<Default Extension="xml" ContentType="application/xml"/>'+
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>';
+  let sh='',rel='';
+  hojas.forEach((h,i)=>{
+    ct+='<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
+    sh+='<sheet name="'+xe(h.nombre.slice(0,31))+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>';
+    rel+='<Relationship Id="rId'+(i+1)+'" Type="'+R+'/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>';
+  });
+  ct+='</Types>';
+  rel+='<Relationship Id="rId'+(hojas.length+1)+'" Type="'+R+'/styles" Target="styles.xml"/>';
+  const wb='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="'+N+'" xmlns:r="'+R+'"><sheets>'+sh+'</sheets></workbook>';
+  const wbr='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+rel+'</Relationships>';
+  const raiz='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'+
+    '<Relationship Id="rIdWB" Type="'+R+'/officeDocument" Target="xl/workbook.xml"/></Relationships>';
+  const arch=[{nombre:'[Content_Types].xml',datos:utf8(ct)},{nombre:'_rels/.rels',datos:utf8(raiz)},
+    {nombre:'xl/workbook.xml',datos:utf8(wb)},{nombre:'xl/_rels/workbook.xml.rels',datos:utf8(wbr)},
+    {nombre:'xl/styles.xml',datos:utf8(estilos)}];
+  hojas.forEach((h,i)=>arch.push({nombre:'xl/worksheets/sheet'+(i+1)+'.xml',datos:utf8(hoja(h.filas,h.anchos))}));
+  return zipear(arch);
+}
+
+function exportarExcel(){
+  const E=t=>({v:t,t:'e'});
+  const vs=S.viajes.filter(v=>enRango(v)&&!v.borrado).sort((a,b)=>a.fecha<b.fecha?-1:1);
+  const cs=S.costos.filter(x=>enRango(x)&&!x.borrado).sort((a,b)=>a.fecha<b.fecha?-1:1);
+  if(!vs.length&&!cs.length){toast('No hay nada que exportar en este periodo');return}
+
+  // Hoja 1: Viajes
+  const h1=[[E('Fecha'),E('Vale'),E('Cliente'),E('Obra'),E('Destino'),E('Placa'),E('Conductor'),
+    E('Cant. viajes'),E('m³ por viaje'),E('m³ total'),E('Tarifa viaje'),E('Tarifa m³'),E('Valor total'),
+    E('Estado'),E('N.º documento'),E('Observaciones')]];
+  vs.forEach(v=>{const k=calcViaje(v),o=byId(S.mae.obras,v.obraId)||{};
+    h1.push([{v:v.fecha,t:'f'},{v:v.vale||''},{v:tCli(v)},{v:tObra(v)},{v:o.destino||v.destino||''},
+      {v:tVol(v)},{v:tCon(v)},{v:k.cant,t:'i'},{v:k.m3,t:'n'},{v:k.m3Tot,t:'n'},
+      {v:k.vv,t:'$'},{v:k.vm,t:'$'},{v:k.total,t:'$'},
+      {v:(ESTADOS[v.estado||'pendiente']||['','' ])[1]},
+      {v:(byId(S.facturas,v.facturaId)||{}).numero||''},{v:v.obs||''}])});
+  h1.push([{v:'TOTAL',b:true},null,null,null,null,null,null,{v:sumCant(vs),t:'i',b:true},null,
+    {v:sumM3(vs),t:'n',b:true},null,null,{v:sumTot(vs),t:'$',b:true}]);
+
+  // Hoja 2: Costos
+  const h2=[[E('Fecha'),E('Tipo'),E('Placa'),E('Detalle'),E('Valor')]];
+  cs.forEach(x=>h2.push([{v:x.fecha,t:'f'},{v:x.tipo||'Otros'},
+    {v:x.volquetaId?nomVol(x.volquetaId):'General'},{v:x.descripcion||''},{v:+x.valor||0,t:'$'}]));
+  const totCos=cs.reduce((s,x)=>s+(+x.valor||0),0);
+  h2.push([{v:'TOTAL',b:true},null,null,null,{v:totCos,t:'$',b:true}]);
+
+  // Hoja 3: Resumen por obra
+  const go={};vs.forEach(v=>{(go[kObra(v)]=go[kObra(v)]||[]).push(v)});
+  const h3=[[E('Obra'),E('Cliente'),E('Viajes'),E('m³'),E('Valor'),E('Por facturar')]];
+  Object.keys(go).forEach(k=>{const a=go[k];
+    h3.push([{v:tObra(a[0])},{v:tCli(a[0])},{v:sumCant(a),t:'i'},{v:sumM3(a),t:'n'},
+      {v:sumTot(a),t:'$'},{v:sumTot(a.filter(x=>x.estado!=='facturado')),t:'$'}])});
+  h3.push([{v:'TOTAL',b:true},null,{v:sumCant(vs),t:'i',b:true},{v:sumM3(vs),t:'n',b:true},{v:sumTot(vs),t:'$',b:true}]);
+
+  // Hoja 4: Liquidación de conductores
+  const gc={};vs.forEach(v=>{(gc[kCon(v)]=gc[kCon(v)]||[]).push(v)});
+  const h4=[[E('Conductor'),E('Viajes'),E('m³'),E('Flete generado'),E('Base de pago'),E('A pagar')]];
+  let totPago=0;
+  Object.keys(gc).forEach(k=>{const a=gc[k],d=byId(S.mae.conductores,a[0].conductorId)||{};
+    const apr=a.filter(x=>x.estado==='aprobado'||x.estado==='facturado');
+    const pago=pagoDe(d,apr);totPago+=pago;
+    h4.push([{v:tCon(a[0])||'Sin conductor'},{v:sumCant(a),t:'i'},{v:sumM3(a),t:'n'},{v:sumTot(a),t:'$'},
+      {v:d.tipoPago==='Porcentaje'?((+d.porcentaje||0)+'% del flete'):((+d.valorViaje||0)+' por viaje')},
+      {v:pago,t:'$'}])});
+  h4.push([{v:'TOTAL',b:true},null,null,null,null,{v:totPago,t:'$',b:true}]);
+
+  // Hoja 5: Rendimiento por volqueta
+  const gv={};vs.forEach(v=>{(gv[kVol(v)]=gv[kVol(v)]||[]).push(v)});
+  const h5=[[E('Placa'),E('Vinculación'),E('Viajes'),E('m³'),E('Ingreso'),E('Costos'),E('Pago tercero'),E('Margen')]];
+  Object.keys(gv).forEach(k=>{const a=gv[k],vo=byId(S.mae.volquetas,a[0].volquetaId)||{};
+    const i=sumTot(a),co=cs.filter(x=>x.volquetaId===a[0].volquetaId).reduce((s,x)=>s+(+x.valor||0),0);
+    const te=vo.tipo==='Tercero'?i*(+vo.porcTercero||0)/100:0;
+    h5.push([{v:tVol(a[0])||'Sin volqueta'},{v:vo.tipo||''},{v:sumCant(a),t:'i'},{v:sumM3(a),t:'n'},
+      {v:i,t:'$'},{v:co,t:'$'},{v:te,t:'$'},{v:i-co-te,t:'$'}])});
+
+  // Hoja 6: Documentos de cobro
+  const fac=S.facturas.filter(f=>!f.borrado&&f.fecha>=P.from&&f.fecha<=P.to);
+  const h6=[[E('N.º'),E('Fecha'),E('Cliente'),E('Obra'),E('Desde'),E('Hasta'),E('Viajes'),E('m³'),
+    E('Subtotal'),E('IVA'),E('Total'),E('Retefuente'),E('ReteICA'),E('Neto a pagar'),E('Estado')]];
+  fac.forEach(f=>h6.push([{v:f.numero},{v:f.fecha,t:'f'},{v:nomCli(f.clienteId)},{v:f.obraNombre||'Todas'},
+    {v:f.desde,t:'f'},{v:f.hasta,t:'f'},{v:f.viajes||0,t:'i'},{v:f.m3||0,t:'n'},
+    {v:f.subtotal,t:'$'},{v:f.iva,t:'$'},{v:f.total,t:'$'},{v:f.retefuente,t:'$'},{v:f.reteica,t:'$'},
+    {v:f.pagar,t:'$'},{v:f.estado||''}]));
+
+  const bytes=libro([
+    {nombre:'Viajes',filas:h1,anchos:[11,10,24,24,22,10,20,9,10,9,12,10,13,12,13,30]},
+    {nombre:'Costos',filas:h2,anchos:[11,16,10,40,13]},
+    {nombre:'Resumen por obra',filas:h3,anchos:[26,24,9,10,14,14]},
+    {nombre:'Liquidacion conductores',filas:h4,anchos:[24,9,10,15,18,14]},
+    {nombre:'Rendimiento volquetas',filas:h5,anchos:[12,13,9,10,14,13,14,14]},
+    {nombre:'Documentos de cobro',filas:h6,anchos:[11,11,24,22,11,11,9,9,13,12,13,12,11,14,11]}
+  ]);
+  const nombre='Volquetas '+P.from+' a '+P.to+'.xlsx';
+  const blob=new Blob([bytes],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=nombre;
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+  toast('Excel generado: '+nombre);
+}
+
 /* ===================== TABLERO (admin) ===================== */
 function tablaSimple(cols,rows,foot){
   const w=el('div',{class:'tw'});
@@ -507,9 +713,13 @@ function selectorPeriodo(){
 }
 function vTablero(){
   const c=el('div',{class:'stack'});
+  const acc=el('div',{class:'row'});
+  const bXls=el('button',{class:'btn sm acc',type:'button'},'Exportar a Excel');
+  bXls.onclick=()=>{try{exportarExcel()}catch(e){toast('No se pudo generar el Excel')}};
   const bAct=el('button',{class:'btn sm sec',type:'button'},'Actualizar');
   bAct.onclick=async()=>{toast('Buscando novedades…');await sincronizar(true)};
-  c.appendChild(ph('Tablero','Del '+fFecha(P.from)+' al '+fFecha(P.to),bAct));
+  acc.appendChild(bXls);acc.appendChild(bAct);
+  c.appendChild(ph('Tablero','Del '+fFecha(P.from)+' al '+fFecha(P.to),acc));
   c.appendChild(selectorPeriodo());
 
   const vs=S.viajes.filter(v=>enRango(v)&&!v.borrado);
