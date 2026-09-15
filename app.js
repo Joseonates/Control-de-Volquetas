@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='13';
+const VERSION='14';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -970,8 +970,8 @@ function tarjetaValidar(v){
   else th.appendChild(el('div',{class:'thumb',style:'display:flex;align-items:center;justify-content:center;color:var(--bad);font-size:10px;text-align:center'},'sin<br>foto'));
   top.appendChild(th);
   const m=el('div',{class:'m'});
-  m.innerHTML='<div class="t">'+esc(nomObra(v.obraId))+'</div>'+
-    '<div class="d">Vale '+esc(v.vale||'s/n')+' · '+esc(nomVol(v.volquetaId))+' · '+esc(nomCon(v.conductorId))+'</div>'+
+  m.innerHTML='<div class="t">'+esc(tObra(v))+'</div>'+
+    '<div class="d">Vale '+esc(v.vale||'s/n')+' · '+esc(tVol(v)||'sin placa')+' · '+esc(tCon(v)||'sin conductor')+'</div>'+
     '<div class="d">'+nf.format(k.cant)+' viaje(s) × '+n2(k.m3)+' m³ = '+n2(k.m3Tot)+' m³</div>'+
     (v.obs?'<div class="d">“'+esc(v.obs)+'”</div>':'');
   top.appendChild(m);
@@ -1099,7 +1099,7 @@ function formCosto(x){
 }
 
 /* ===================== ADMIN: cobro ===================== */
-let cobroCli='', verBorradas=false;
+let cobroCli='', cobroObra='', verBorradas=false;
 function vCobro(){
   const c=el('div',{class:'stack'});
   c.appendChild(ph('Cuenta de cobro',fFecha(P.from)+' al '+fFecha(P.to)));
@@ -1109,14 +1109,28 @@ function vCobro(){
   card.innerHTML='<h3>Nuevo documento</h3><div class="pad">'+
     '<div class="gf">'+fld('Cliente','<select id="kCli">'+S.mae.clientes.map(o=>'<option value="'+o.id+'"'+(o.id===cobroCli?' selected':'')+'>'+esc(o.nombre)+'</option>').join('')+'</select>')+
     fld('Desde','<input type="date" id="pD" value="'+P.from+'">')+fld('Hasta','<input type="date" id="pH" value="'+P.to+'">')+'</div>'+
+    '<div style="margin-top:10px" id="kObraSel"></div>'+
     '<div id="kBody" style="margin-top:12px"></div></div>';
-  $('#kCli',card).onchange=e=>{cobroCli=e.target.value;render()};
+  $('#kCli',card).onchange=e=>{cobroCli=e.target.value;cobroObra='';render()};
   $('#pD',card).onchange=e=>{P.from=e.target.value;render()};
   $('#pH',card).onchange=e=>{P.to=e.target.value;render()};
   c.appendChild(card);
 
-  const list=S.viajes.filter(v=>v.estado==='aprobado'&&!v.borrado&&enRango(v)&&cliDeObra(v.obraId)===cobroCli);
-  const pendVal=S.viajes.filter(v=>(v.estado||'pendiente')==='pendiente'&&enRango(v)&&cliDeObra(v.obraId)===cobroCli);
+  const delCliente=S.viajes.filter(v=>v.estado==='aprobado'&&!v.borrado&&enRango(v)&&tCliId(v)===cobroCli);
+  // Obras del cliente que tienen viajes aprobados en el corte
+  const obrasCorte=[];
+  delCliente.forEach(v=>{const k=kObra(v);if(!obrasCorte.some(o=>o.k===k))obrasCorte.push({k,nombre:tObra(v),ej:v})});
+  if(cobroObra&&!obrasCorte.some(o=>o.k===cobroObra))cobroObra='';
+  $('#kObraSel',card).innerHTML=fld('Obra a facturar',
+    '<select id="kObra"><option value="">Todas las obras del cliente ('+obrasCorte.length+')</option>'+
+    obrasCorte.map(o=>{const a=delCliente.filter(v=>kObra(v)===o.k);
+      return '<option value="'+esc(o.k)+'"'+(o.k===cobroObra?' selected':'')+'>'+esc(o.nombre)+
+        ' — '+sumCant(a)+' viajes · '+money(sumTot(a))+'</option>'}).join('')+'</select>');
+  const so=$('#kObra',card);if(so)so.onchange=e=>{cobroObra=e.target.value;render()};
+
+  const list=cobroObra?delCliente.filter(v=>kObra(v)===cobroObra):delCliente;
+  const pendVal=S.viajes.filter(v=>(v.estado||'pendiente')==='pendiente'&&enRango(v)&&tCliId(v)===cobroCli&&
+    (!cobroObra||kObra(v)===cobroObra));
   const body=$('#kBody',card);
   let h='';
   if(pendVal.length)h+='<div class="note" style="margin-bottom:10px"><b>'+sumCant(pendVal)+' viaje(s) sin validar</b> de este cliente no entran a la cuenta. Valídalos primero.</div>';
@@ -1132,6 +1146,7 @@ function vCobro(){
     $('#kGen',body).onclick=async()=>{
       const num=(S.cfg.prefijo||'CC-')+String(S.cfg.consecutivo||1).padStart(4,'0');
       const f={id:uid('f'),numero:num,fecha:hoy(),clienteId:cobroCli,desde:P.from,hasta:P.to,
+        obraNombre:cobroObra?tObra(list[0]):'',
         viajeIds:list.map(v=>v.id),pIva:+S.cfg.iva||0,pRf:+S.cfg.retefuente||0,pRi:+S.cfg.reteica||0,
         subtotal:k.sub,iva:k.iva,retefuente:k.rf,reteica:k.ri,total:k.total,pagar:k.pagar,
         viajes:sumCant(list),m3:sumM3(list),estado:'emitida'};
@@ -1161,7 +1176,7 @@ function vCobro(){
       f.estado==='pagada'?'<span class="chip apr">Pagada</span>':
       f.estado==='anulada'?'<span class="chip rec">Anulada</span>':'<span class="chip fac">Emitida</span>';
     d.innerHTML='<div class="m"><div class="t">'+esc(f.numero)+'</div>'+
-      '<div class="d">'+esc(nomCli(f.clienteId))+' · '+fFecha(f.desde)+' al '+fFecha(f.hasta)+'</div>'+
+      '<div class="d">'+esc(nomCli(f.clienteId))+(f.obraNombre?' · '+esc(f.obraNombre):'')+' · '+fFecha(f.desde)+' al '+fFecha(f.hasta)+'</div>'+
       '<div style="margin-top:5px">'+chip+'</div></div>'+
       '<div class="n">'+money(f.pagar)+'</div>';
     if(f.borrado){d.style.opacity='.62'}
@@ -1237,7 +1252,7 @@ function docFactura(f){
       '<td style="text-align:right">'+money(sumTot(a))+'</td></tr>'}
   let anx='<tr><th>Fecha</th><th>Vale</th><th>Obra</th><th>Placa</th><th>Conductor</th><th style="text-align:right">Viajes</th><th style="text-align:right">m³</th><th style="text-align:right">Valor</th></tr>';
   vs.sort((a,b)=>a.fecha<b.fecha?-1:1).forEach(v=>{const c=calcViaje(v);
-    anx+='<tr><td>'+fFecha(v.fecha)+'</td><td>'+esc(v.vale||'')+'</td><td>'+esc(nomObra(v.obraId))+'</td><td>'+esc(nomVol(v.volquetaId))+'</td><td>'+esc(nomCon(v.conductorId))+'</td><td style="text-align:right">'+nf.format(c.cant)+'</td><td style="text-align:right">'+n2(c.m3Tot)+'</td><td style="text-align:right">'+money(c.total)+'</td></tr>'});
+    anx+='<tr><td>'+fFecha(v.fecha)+'</td><td>'+esc(v.vale||'')+'</td><td>'+esc(tObra(v))+'</td><td>'+esc(tVol(v))+'</td><td>'+esc(tCon(v))+'</td><td style="text-align:right">'+nf.format(c.cant)+'</td><td style="text-align:right">'+n2(c.m3Tot)+'</td><td style="text-align:right">'+money(c.total)+'</td></tr>'});
   return '<div class="doc">'+
     '<div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap">'+
     '<div><div style="font-family:var(--disp);font-weight:800;font-size:19px">'+esc(e.nombre||'Mi empresa')+'</div>'+
