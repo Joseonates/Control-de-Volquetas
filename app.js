@@ -5,7 +5,7 @@
 
 /* Número de versión visible en la app. Sirve para comprobar de un vistazo
    si el celular ya tomó la versión nueva. */
-const VERSION='11';
+const VERSION='12';
 const FECHA_VERSION='14/09/2026';
 
 /* ===================== utilidades ===================== */
@@ -336,7 +336,8 @@ function pintarGate(paso){
       '<button class="btn big acc" id="gCon">Soy conductor</button>'+
       '<button class="btn big sec" id="gAdm">Soy administrador</button></div>'+
       '<p style="color:var(--muted);font-size:12px;text-align:center;margin-top:22px">Versión '+VERSION+' · '+FECHA_VERSION+'</p>';
-    $('#gCon').onclick=()=>pintarGate('con1');
+    // si el teléfono ya está conectado a la empresa, va directo a pedir usuario y clave
+    $('#gCon').onclick=()=>pintarGate(conectado()?'con2':'con1');
     $('#gAdm').onclick=()=>pintarGate('adm');
     return;
   }
@@ -369,7 +370,8 @@ function pintarGate(paso){
         '<button class="btn acc" id="lOk">Entrar</button>'+
         '<button class="btn sec" id="cBack">Atrás</button></div>'+
         '<p style="color:var(--muted);font-size:12.5px;margin-top:16px">¿No tienes usuario o se te olvidó la clave? '+
-        'Pídeselos a la oficina: los crea desde Ajustes → Conductores.</p>';
+        'Pídeselos a la oficina: los crea desde Ajustes → Conductores.</p>'+
+        '<p style="text-align:center;margin-top:10px"><button class="btn sm sec" id="lOtra">Conectar con otro código</button></p>';
       const entrar=async()=>{
         const u=normUsr($('#lUsr').value), k=$('#lCla').value;
         if(!u||!k){toast('Escribe usuario y clave');return}
@@ -382,7 +384,8 @@ function pintarGate(paso){
       };
       $('#lOk').onclick=entrar;
       $('#lCla').addEventListener('keydown',e=>{if(e.key==='Enter')entrar()});
-      $('#cBack').onclick=()=>pintarGate('con1');
+      $('#cBack').onclick=()=>pintarGate('rol');
+      $('#lOtra').onclick=()=>pintarGate('con1');
       return;
     }
     // Todavía sin credenciales: se elige el nombre, como antes.
@@ -619,9 +622,10 @@ function esMio(v){
   if(v.conductorId&&S.cfg.conductorId&&v.conductorId===S.cfg.conductorId)return true;
   const yo=miConductor();
   if(!yo)return false;
+  // basta con que coincida el usuario O el nombre; no se exige que coincidan los dos
   if(v.conductorUsuario&&yo.usuario&&normUsr(v.conductorUsuario)===normUsr(yo.usuario))return true;
-  // sin usuario guardado (registros viejos), se compara el nombre
-  if(!v.conductorUsuario&&v.conductorNombre&&normUsr(v.conductorNombre)===normUsr(yo.nombre))return true;
+  if(v.conductorNombre&&yo.nombre&&normUsr(v.conductorNombre)===normUsr(yo.nombre))return true;
+  if(v.conductorId&&yo.usuario&&normUsr(v.conductorId)===normUsr(yo.usuario))return true;
   return false;
 }
 function aplicarPreset(k){
@@ -735,6 +739,17 @@ function vMios(){
       z.appendChild(document.createElement('br'));z.appendChild(t);
     }else{
       z.textContent=PC.k==='hoy'?'Todavía no has registrado viajes hoy.':'Todavía no tienes viajes registrados.';
+      // Diagnóstico: si el teléfono sí tiene viajes pero ninguno a tu nombre, hay que verlo.
+      const otros=S.viajes.filter(x=>!x.borrado);
+      if(otros.length){
+        const duenos=[...new Set(otros.map(x=>(x.conductorNombre||'').trim()||'(sin nombre)'))];
+        const d=el('div',{class:'note',style:'text-align:left;margin-top:14px;font-size:12.5px'});
+        d.innerHTML='<b>Revisa esto con la oficina.</b><br>'+
+          'Este teléfono tiene '+otros.length+' viaje(s) guardados, pero ninguno a tu nombre.<br>'+
+          'Entraste como <b>'+esc(yo.nombre||'—')+'</b>'+(yo.usuario?' ('+esc(yo.usuario)+')':'')+'.<br>'+
+          'Los viajes guardados están a nombre de: '+esc(duenos.join(', '))+'.';
+        z.appendChild(d);
+      }
     }
     lst.appendChild(z);
   }else{
@@ -1472,7 +1487,7 @@ async function boot(){
   ['clientes','obras','volquetas','conductores'].forEach(k=>{if(!Array.isArray(S.mae[k]))S.mae[k]=[]});
   S.viajes=await dbAll('viajes');S.costos=await dbAll('costos');S.facturas=await dbAll('facturas');
   // Si la oficina ya creó credenciales, el conductor tiene que entrar con las suyas.
-  if(!S.cfg.rol)pintarGate('rol');
+  if(!S.cfg.rol)pintarGate(conectado()&&hayCredenciales()&&!S.cfg.pin?'con2':'rol');
   else if(S.cfg.rol==='conductor'&&hayCredenciales()&&!S.cfg.auth)pintarGate('con2');
   else iniciar();
   pintarSync();
